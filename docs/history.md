@@ -148,6 +148,12 @@
 动机：自检脚本各自实现 main() 汇总、临时目录管理与自运行入口，无法单测/选择性运行/输出结构化结果；无 lint 门禁时风格漂移无约束。
 取舍：①真实上游端到端（3 个，累计下载约 30MB+）标记 `@pytest.mark.upstream` 并默认 `-m "not upstream"` 跳过——上游消耗须逐次授权（doc-maintenance 原则），默认套件保持纯本地约 6 秒全绿；②slowapi 限速器为进程内存态，原「每文件独立进程」的天然隔离在 pytest 单进程下失效，conftest 以「模块切换」粒度重置 `limiter._storage` 精确复刻原语义（曾考虑每测试重置，会破坏文件内 429 断言的用例间耦合，否决）；③业务代码仅接受行为零变更的风格修复（PEP 585/604 注解现代化、导入排序、`raise ... from None`——消息模板已内嵌原始错误文本、行宽换行），不使用 ruff format 避免大规模重排；④ruff/pytest 为开发依赖装于 .venv，不建 requirements-dev.txt（用户确认暂不固化）。
 
+### 2.20 前端 Modern SaaS + Minimalist 视觉重构（2026-11-16，feat/frontend-modern-redesign）
+
+决策：在零新增依赖（仍为 React 19 + AntD 5 + Vite 7）前提下对前端做纯视觉层重构，视觉样式收敛为两处唯一来源——`main.jsx` ConfigProvider 主题令牌（品牌红 `#c20c0c` 仅作强调色、`borderRadius: 10`、系统字体栈、三级文字色、组件级 Layout/Card/Tabs/Table/Button/Input 令牌）与 `styles.css`（CSS 变量设计令牌 + 布局 + 微交互 + ≤768px 响应式 + `prefers-reduced-motion` 降级）。信息架构调整：红色导航栏改白色 sticky 细边框导航（`assets/music.svg` 用户提供的品牌 Logo）+ 右侧 Cookie 设置入口；Cookie 区域改默认收起的紧凑可折叠设置条（摘要行含已配置/未配置状态点）；五项功能维持 Tabs 组织（2px 圆角红色指示器 + 面板淡入）；各 Tab 输入框 + 按钮改通栏 40px 高主操作区；专辑/歌单解析结果改「左封面 + 右名称/元信息/简介限行展开」横向头部（封面取自后端已返回但前端此前未消费的 `coverImgUrl`/`pic` 字段，缺失显示图标占位不编造 URL）；单曲解析新增封面展示与 Skeleton 骨架；数据表加序号列与行悬停；排行榜去红色徽标装饰改排名数字列表（TOP3 品牌红）并展示 `window_days` 窗口。
+取舍：不改 `api.js` 与任何请求/状态/事件逻辑（业务行为零变更，仅展示层重排）；不引入 Tailwind/CSS-in-JS/动画库（CSS transition 足够）；不做玻璃拟态/大面积渐变/深色模式；Logo 用用户提供的 `music.svg` 直接 `<img>` 引用（黑色单色填充，契合极简风格，不再包红色容器）。
+风险边界：`npm run build` 通过；无头 Chrome（puppeteer-core + 系统 Chrome，仅装于 /tmp 不入仓库）对真实后端完成全 Tab 交互冒烟——Cookie 展开、搜索、单曲解析（含试听与歌词）、歌单解析（热歌榜）、专辑解析（Jay，封面/发行时间/简介展开）、下载页布局、移动端视口截图均通过且控制台除 favicon 404（项目本无 favicon，既有现象）外无错误。
+
 ## 3. 历史遗留与不一致（详见 docs/knowledge-base.md）
 
 - `entrypoint.sh` 的 `--level/--mode/--url` 与 `.env` 变量为 Docker 化时期产物，`main.py` 从未实现对应参数解析（已知问题 #2）。**已于 2026-11-15 随统一启动入口任务废除**：`entrypoint.sh` 改调 `start.py`，`.env` 删除。
