@@ -104,7 +104,9 @@ _extract_music_id → music_id
    │
    ▼
 【落盘】路径 = storage/<song_id>/歌曲名[.音质].扩展名（扩展名判定链不变）
-   流式下载 → *.part 临时文件 → 原子改名
+   下载经传输层：单流或 4 段 Range 并发（multi_thread 开关，>512KB 才分段，
+   失败自动回退单流）+ 共享令牌节流（speed_limit_kb，0 不限速）
+   → *.part 临时文件 → 原子改名
    │
    ▼
 【后处理 _post_register】（顺序保证 DB 大小与落盘一致）
@@ -127,23 +129,29 @@ json → 下载信息 JSON（含 cached 字段）
 入口条件检查：ffmpeg 可用（懒加载 which）∧ 扩展名 ∈ {.mp3,.flac,.m4a,.mp4,.ogg,.opus} ∧ 文件存在
    │
    ▼
-下载封面 pic_url → download_dir 下临时 .jpg（失败则跳过封面，不阻断）
+封面来源：_post_register 已落盘的 cover.jpg（cover_local 参数，不再重复下载）；
+          未提供时回退下载到 storage/ 下临时 .jpg（失败则跳过封面，不阻断）
    │
    ▼
 构造命令：ffmpeg -y -loglevel error
           -i 音频文件 [-i 封面]
-          -metadata title/artist/album/album_artist/comment[/track/tracktotal]
+          -metadata title/artist/album/album_artist/comment/lyrics[/track/tracktotal]
           + 各格式专属参数（见下表）
           [-f 输出 muxer] 输出到 "原名.tagging.原扩展名"
    │
    ▼
 subprocess.run 超时 120s
    ├─ 成功 → shutil.move 原子替换原文件 → True
-   └─ 失败/超时/异常 → 打印警告 → False（下载结果不受影响）
+   └─ 失败/超时/异常 → DOWNLOADER 日志告警 → False（下载结果不受影响）
    │
    ▼
-finally：删除封面临时文件与残留 .tagging 文件
+finally：删除封面临时文件（已落盘 cover.jpg 不删）与残留 .tagging 文件
 ```
+
+歌词嵌入（`lyrics` 键，2026-11-15 新增）：歌词原文非空时随 `-metadata lyrics=` 写入，
+使文件独立携带歌词、无需外部 .lrc。本机 ffmpeg 9.0.2 逐格式 ffprobe 实测：
+`.mp3` 写入 ID3v2 USLT、`.flac` 写入 Vorbis `LYRICS` 注释、`.m4a` 写入 `©lyr` 原子，
+三种格式确认支持；`.ogg`/`.opus`/`.mp4` 未逐一实测（失败不阻断）。
 
 各格式专属参数（`_build_format_args`）：
 

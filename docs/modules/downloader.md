@@ -33,11 +33,13 @@ Web 服务仅使用其中的 `download_music_file` 同步路径；异步/内存/
 
 ```python
 MusicDownloader(storage_dir="storage", max_concurrent=3, ffmpeg_path=None,
-                storage_manager=None)
+                storage_manager=None, multi_thread=False, speed_limit_kb=0)
 ```
 
 - 存储构造：`storage_manager` 注入外部 `StorageManager`（服务侧传入带缓存上限配置的实例）；
   缺省时按 `storage_dir` 自建（不限总量、默认 90 天保留期）。存储布局与 DB 设计见 `docs/database.md`。
+- 传输配置：`multi_thread`（单文件多线程分段下载开关）与 `speed_limit_kb`（KB/s，0 不限速）
+  读自 `config.toml` 的 `[download]`，由服务侧构造时传入。
 - 构造时内部新建一份 `NeteaseAPI`、用 `shutil.which("ffmpeg")` 做首次检测（缺失仅经 `DOWNLOADER` 日志器告警，不报错）。
 - 日志：模块内事件统一经 `logger.get_logger("DOWNLOADER")` 输出（GIN 风格），CLI 入口（`__main__`）的交互输出仍为 print。
 - `_resolve_ffmpeg()`：每次写元数据前懒加载重试并回写缓存，支持服务运行中途安装 ffmpeg。
@@ -57,6 +59,17 @@ MusicDownloader(storage_dir="storage", max_concurrent=3, ffmpeg_path=None,
 6. 归属专辑（`album_id` 非空）→ `copy2` 副本至 `storage/albums/<album_id>/<song_id>/`（含封面歌词）并以 `is_copy=1` 登记 + 各副本 `register_hash`。
 
 缓存命中（`get_cached_file`）时先执行 `verify_hash`（重算 SHA-256 比对 `sha256sum.db`）：一致则复用并由 root.db 记录构建 `MusicInfo`（`_music_info_from_record`），不发起上游调用；不一致或无记录判定损坏，`invalidate_file` 删除该音质主文件与副本后进入重新下载分支（重下后重新完成元数据写入并重新登记哈希）。
+
+## 3.5 传输层（2026-11-15 新增）
+
+| 组件 | 行为 |
+| --- | --- |
+| `_RateLimiter(rate_kb)` | 按「已发字节 / 目标速率」均匀节流，多线程共享实例；`rate_kb=0` 零等待 |
+| `_download_single_stream(url, dest, limiter)` | 单流 64KB 分块下载，逐块限速 |
+| `_download_ranged(url, start, end, dest, limiter)` | Range 分段下载，非 206 响应抛错 |
+| `_download_to(url, dest, total_size, limiter)` | 总入口：`multi_thread=True` 且总大小 > 512KB 时按 **4 段 Range 并发**（`ThreadPoolExecutor`）下载到 `.part.p{i}` 后顺序拼接并校验总大小；总大小未知、任一分段失败或大小不匹配时清理分段并**自动回退单流** |
+
+仅同步路径（服务实际使用的 `download_music_file`）接入传输层；异步/批量预留路径未接入（见第 5 节）。
 
 ## 4. 信息获取 `get_music_info(music_id, quality)`
 
@@ -86,7 +99,7 @@ MusicDownloader(storage_dir="storage", max_concurrent=3, ffmpeg_path=None,
 1. **前置检查**：ffmpeg 可解析、扩展名 ∈ `METADATA_FORMATS`、文件存在；任一不满足直接返回 `False` 并经 `DOWNLOADER` 日志器告警。
 2. **封面**：优先使用 `_post_register` 已落盘的 `storage/<song_id>/cover.jpg`（`cover_local` 参数）；未提供时回退下载为 `storage/` 下 `mkstemp` 临时 `.jpg`（finally 清理，已落盘文件不删）；下载失败降级为无封面继续。
 3. **命令构造顺序**：全局选项 → `-i` 音频 →（可选）`-i` 封面 → `-metadata` 序列 → 格式专属参数 → `-f` muxer（必须位于 `-i` 之后作为输出选项）→ 输出文件 `原名.tagging.原扩展名`。
-4. **写入的元数据键**：`title`、`artist`、`album`、`album_artist`、`comment`（固定为 `Downloaded from Netease Cloud Music`）、`track`/`tracktotal`（`track_number > 0` 时，两者同值）。
+4. **写入的元数据键**：`title`、`artist`、`album`、`album_artist`、`comment`（固定为 `Downloaded from Netease Cloud Music`）、`track`/`tracktotal`（`track_number > 0` 时，两者同值）、**`lyrics`**（歌词原文非空时写入，2026-11-15 新增）。歌词嵌入经本机 ffmpeg 9.0.2 逐格式实测（ffprobe 验证）：`.mp3`→ID3v2 USLT、`.flac`→Vorbis `LYRICS` 注释、`.m4a`→`©lyr` 原子，三种格式均确认可写回；`.ogg`/`.opus`/`.mp4` 未逐一实测，行为随 muxer 而定（失败不阻断，见第 6 条）。
 5. **原子性**：`subprocess.run` 成功且临时文件存在时 `shutil.move` 替换原文件；超时 120 秒；`finally` 中清理封面临时文件与残留 `.tagging` 文件。
 6. **失败语义**：一切失败仅经 `DOWNLOADER` 日志器告警（WARNING/ERROR）并返回 `False`，调用方（下载流程）不受影响。
 
