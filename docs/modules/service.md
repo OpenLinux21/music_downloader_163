@@ -76,6 +76,7 @@
 | `GET\|POST /album` | `get_album` | 是 | 包装为 `data={status:200, album:结果}`；**id 不做链接解析** |
 | `GET\|POST /download` | `download_music_api` | 是 | 见下文 6.2 |
 | `GET /rank` | `download_rank` | 是 | 下载排行榜：窗口内独立会话数 TOP 20，并列按名称；实现见 `docs/database.md` 第 4 节 |
+| `GET /recommend` | `recommend_api` | 是 | 智能推荐（见下文 6.3） |
 | `GET /api/info` | `api_info` | 否 | 服务元信息；`supported_qualities` 硬编码 7 项缺 `dolby`（已知问题 #4） |
 
 ### 6.1 `/song` 实现
@@ -94,6 +95,12 @@
 5. 命中缓存时执行 `storage.record_access(song_id)` 累加访问量；
 6. `format=json` 返回下载信息（含 `cached` 字段）；`format=file` 用 `FileResponse(filename=…)` 返回文件流，附 `X-Download-Message`、`X-Download-Filename`（实际文件名，`quote` 编码）响应头；
 7. 真实完成交付后 `session_manager.record_download(request.state.session_id, song_id, quality)` 计入排行榜（同会话同歌曲去重）。
+
+### 6.3 `/recommend` 实现（2026-11-15 新增）
+
+1. 校验 `song_id` 非空并可解析为数字 ID（`_extract_music_id` 支持链接/短链）；
+2. 委托 `StorageManager.recommend_for(song_id, limit=5)`（打分/兜底算法见 `docs/api.md` 第 4.9 节）；
+3. 返回 `{song_id, size, recommendations[]}`，每项含 `qualities`（实际缓存音质版本 + 文件大小，`cached=true`）。
 
 ## 7. 启动流程（`start.py`，统一启动入口）
 
