@@ -17,6 +17,7 @@
 | Docker 修复 | PR#133 `fcbb409` align Docker Python version、`0e3af03`、`3408787` | 将镜像 Python 版本与锁定依赖对齐（修复构建兼容性）；移除 Docker 冒烟 CI；**镜像定为 python:3.12-alpine3.23** |
 | 维护 | `18b28be` chore: ignore music_api.log | 将运行日志纳入 .gitignore |
 | 配置系统 | `feat/config-system` 分支（2026-11-15） | 引入 `config.toml` 配置体系与 `config_loader.py`；Cookie 自 `cookie.txt` 迁入配置并废弃原文件 |
+| 统一日志 | `feat/logging-system` 分支（2026-11-15） | 新增 `logger.py`（GIN 风格请求行/事件行），废除 `music_api.log` 双写 |
 
 ## 2. 重要设计决策及动机（依据代码现状推断与提交记录）
 
@@ -65,6 +66,12 @@
 动机：集中硬编码的服务配置（绑定地址、端口、缓存上限、下载开关、限速），为后续启动检查、限速、缓存清理等功能提供配置基础；同时消除凭据文件被 Git 跟踪的安全隐患（AGENTS.md 凭据红线）。
 取舍：`tomllib` 只读，Cookie 写回用「文本替换单行 + 缺键插入/缺节追加」实现，保留文件注释与结构（完整 TOML 序列化需第三方库，收益不匹配）；配置读取不做内存缓存，保持与旧 `cookie.txt` 相同的「修改即时生效」语义。模板 `config.example.toml` 提交、真实 `config.toml` 不提交。
 迁移效果：本地默认监听地址由 `0.0.0.0` 变为 `127.0.0.1`（容器部署需在挂载的 config.toml 中设 `host = "0.0.0.0"`，见 `docs/deployment.md` §3.4）。
+
+### 2.9 统一日志系统（2026-11-15，feat/logging-system）
+
+决策：以自研 `logger.py`（标准库 `logging` + 自定义 formatter）替换「logging 控制台 + `music_api.log` 文件双写」方案；每请求仅由 `after_request` 输出一条 GIN 风格请求行（`before_request` 只存起始时间），普通事件按级别映射 OK/WARN/ERROR。
+取舍：用户要求"控制台 + 文件各一份"，文件侧用 `RotatingFileHandler`（5MB × 3）防无限增长，且文件内容剥离 ANSI 码（避免污染终端之外的消费场景）；`qr_login.py` 为独立交互 CLI，保持自带 logging/print，不纳入统一日志（避免破坏 CLI 交互界面）。
+附带修复：移除 `music_downloader.get_music_info()` 的调试残留 `print(url_result)`（知识库已知问题 #6），下载器库内事件全部改经 `DOWNLOADER` 组件日志器。
 
 ## 3. 历史遗留与不一致（详见 docs/knowledge-base.md）
 

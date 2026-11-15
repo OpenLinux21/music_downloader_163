@@ -37,7 +37,7 @@ curl http://localhost:5000/health
 
 启动后监听 `config.toml` 的 `server.host:server.port`（默认 `127.0.0.1:5000`，仅本机可访问），浏览器访问 `http://127.0.0.1:5000` 使用 Web 界面。
 
-启动副作用（属正常行为）：自动创建 `downloads/` 目录；生成并追加写 `music_api.log`。
+启动副作用（属正常行为）：自动创建 `downloads/` 目录；创建 `logs/` 目录并生成 `service.log`（控制台与文件各一份 GIN 风格日志）。
 
 命令行工具（可选）：
 
@@ -113,12 +113,21 @@ URL=http://127.0.0.1:5000
 
 ## 5. 日志
 
-| 通道 | 位置 | 格式要点 |
-| --- | --- | --- |
-| 控制台 | stdout | `时间 - music_api - 级别 - 消息` |
-| 文件 | 项目根目录 `music_api.log` | 控制台格式 + `函数名:行号`；无轮转，持续追加 |
+统一日志系统（`logger.py`，高仿 GIN 框架风格），每事件/请求一行，固定字段顺序：
 
-日志级别由 `APIConfig.log_level`（默认 `INFO`）控制；`music_api.log` 已被 `.gitignore` 覆盖。
+```text
+[组件名称] YYYY/MM/DD - hh:mm:ss | 状态码 | 处理耗时 | 来源IP | 访问接口 [| 消息]
+```
+
+| 通道 | 位置 | 特点 |
+| --- | --- | --- |
+| 控制台 | stderr | 状态码按区间 ANSI 着色（2xx 绿 / 3xx 青 / 4xx 黄 / 5xx 红；事件 OK/WARN/ERROR 同规则） |
+| 文件 | `logs/service.log` | 内容无 ANSI 码；`RotatingFileHandler` 单文件 5MB、保留 3 份备份 |
+
+- 请求行示例：`[SERVER] 2026/11/15 - 22:59:39 | 200 | 233.729µs | 127.0.0.1 | GET /health`；耗时单位微秒、保留 3 位小数。
+- 事件行示例：`[DOWNLOADER] 2026/11/15 - 22:59:38 | WARN | - | - | - | 未检测到 ffmpeg，写入元数据功能将不可用`。
+- 组件：`SERVER`（Web 请求/服务事件，级别读 `config.toml` 的 `log_level`）、`DOWNLOADER`（下载与元数据写入）；Werkzeug 自带逐请求日志被压制（ERROR 级），避免重复。
+- `music_api.log` 双写方案已废除；`qr_login.py` 为独立 CLI，仍使用自带 logging 输出。
 
 ## 6. 健康检查与部署验证
 

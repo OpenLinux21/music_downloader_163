@@ -32,7 +32,7 @@
 
 以下事实均通过阅读当前代码与本地运行验证得出，修改对应代码时必须复查：
 
-1. **启动副作用**：导入 `main.py` 即实例化 `MusicAPIService`，会创建 `downloads/` 目录并初始化双通道日志（控制台 + `music_api.log` 文件）。
+1. **启动副作用**：导入 `main.py` 即实例化 `MusicAPIService`，会创建 `downloads/` 与 `logs/` 目录，并初始化统一日志（`SERVER` 组件，控制台彩色 + `logs/service.log` 轮转；2026-11-15 起替代原「控制台 + music_api.log 双写」方案，`music_api.log` 不再生成）。
 2. **Cookie 即时读取**：每个业务请求处理时都调用 `load_cookies()`，后者经 `config_loader.get_default_cookie()` 实时读取 `config.toml` 的 `server.default_cookie`（原 `cookie.txt` 已于 2026-11-15 废弃并从 Git 移除），无内存缓存；未配置或配置文件缺失返回空字典且不抛异常；配置文件存在但 TOML 解析失败时异常上抛（导入 `main.py` 阶段即失败）。
 3. **Cookie 状态判定**：`/health` 的 `cookie_status` 仅判断 Cookie 字典是否非空（`valid`/`invalid`），不校验登录态是否真实有效。
 4. **音质校验表**：`/song` 与 `/download` 的合法音质列表为 8 项（含 `dolby`），硬编码在 `main.py` 的两个路由函数内；`/api/info` 返回的 `supported_qualities` 只有 7 项（缺 `dolby`），属文档性字段不一致。
@@ -58,6 +58,7 @@
 20. **容器时区**：Dockerfile 设置 `TZ=Asia/Shanghai`；pip 使用阿里云镜像源。
 21. **配置加载行为**（`config_loader.py`）：`load_config()` 严格读取（文件缺失抛 `FileNotFoundError`、非法 TOML 抛 `tomllib.TOMLDecodeError`）；`get_config()` 在文件缺失时回落内置默认值并向 stderr 告警，解析错误不吞直接抛出；所有读取无内存缓存，修改配置即时生效。内置默认值：host `127.0.0.1`、port `5000`、`max_size_mb` 8192（MB）、`multi_thread` false、`speed_limit_kb` 0（KB/s，0 不限速）、限速 10 次/分钟 + 25 次/小时。`main.py` 在模块导入时把 `server.host`/`server.port` 接线到 `APIConfig`。
 22. **Cookie 写回与备份**（`config_loader.save_default_cookie` / `qr_login.py`）：写回采用文本替换只改动 `default_cookie` 一行（值经 `json.dumps` 编码，转义规则与 TOML 基本字符串兼容），缺键时插入 `[server]` 节头之后、缺节时文件末尾追加、文件缺失时自动创建最小配置；`qr_login.py` 覆盖/清除前把旧 Cookie 备份为项目根 `cookie.backup.<suffix>.<时间戳>.txt`（已 gitignore），`logout` 通过写空串清除而非删除文件。
+23. **统一日志系统**（`logger.py`，2026-11-15 落地）：GIN 风格格式 `[组件] YYYY/MM/DD - hh:mm:ss | 状态码 | 微秒耗时(3 位小数) | IP | 接口 [| 消息]`；请求行状态码按区间 ANSI 着色（2xx 绿/3xx 青/4xx 黄/5xx 红），事件按级别映射 OK/WARN/ERROR；控制台 handler 着色、`logs/service.log` handler（5MB 轮转 ×3）不着色；请求行由 `after_request` 输出（`before_request` 仅存起始时间），每请求恰好一条；Werkzeug 自带请求日志被压到 ERROR；组件含 `SERVER`（级别读 `config.log_level`）与 `DOWNLOADER`（库内事件，CLI 交互仍为 print）；日志只记录元信息不记录请求体。
 
 ## 4. 外部接口事实（上游依赖）
 
@@ -85,7 +86,7 @@
 | 3 | `/download` 路由的缓存命中检查文件名为 `歌名 [音质].扩展名`，与下载器实际保存名 `歌手 - 歌名.扩展名` 不一致，检查基本不生效，导致重复下载 | `main.py` 的 `download_music_api()` vs `music_downloader.py` 的 `_build_file_path()` | 同一歌曲重复下载时浪费带宽 | 修复时需同步 `docs/modules/service.md` |
 | 4 | `/api/info` 返回的 `supported_qualities` 缺少 `dolby`，与 `/song`、`/download` 的校验列表（8 项）不一致 | `main.py` 的 `api_info()` | 信息展示不完整 | 修复时需同步 `docs/api.md` |
 | 5 | `/download` 链路重复调用上游：`main.py` 先调 `name_v1`+`url_v1`，随后 `MusicDownloader.get_music_info()` 内部再调一次 URL、详情、歌词接口 | `main.py`、`music_downloader.py` 的 `get_music_info()` | 每次下载产生约 5 次上游请求 | 修复时需同步 `docs/data-flow.md` |
-| 6 | `music_downloader.get_music_info()` 中存在调试残留 `print(url_result)`，会把含下载 URL 的完整响应打印到控制台 | `music_downloader.py` 的 `get_music_info()` | 日志噪音、URL 泄露到 stdout | 修复时需同步 `docs/modules/downloader.md` |
+| 6 | ~~`music_downloader.get_music_info()` 中存在调试残留 `print(url_result)`，会把含下载 URL 的完整响应打印到控制台~~ **已修复（2026-11-15）**：随统一日志任务移除，库内事件改经 `DOWNLOADER` 组件日志器输出 | `music_downloader.py` 的 `get_music_info()` | （已消除日志噪音与 URL 泄露） | 已同步 `docs/modules/downloader.md` |
 | 7 | `downloads/` 目录未被 `.gitignore` 覆盖，下载产物有被误提交的风险 | `.gitignore` | 仓库卫生风险 | 提交前必须检查暂存区（`AGENTS.md` 第 2 节凭据安全红线） |
 | 8 | 前端错误分支访问 `data.data.msg`，而错误响应结构中不存在 `data` 字段（`APIResponse.error` 仅含 `status/success/message`），会抛 `TypeError`，错误提示无法显示 | `templates/index.html` 各 `$.post/$.get` 的失败分支 | 用户看不到具体错误原因 | 修复时需同步 `docs/modules/frontend.md` |
 | 9 | `music_api.py` 与 `music_downloader.py` 重复定义 `QualityLevel` 枚举，且两处均未被业务逻辑实际引用（音质校验用硬编码列表） | 两个模块顶部 | 修改音质列表需多处同步 | 见 `docs/doc-maintenance.md` |
@@ -107,3 +108,4 @@
 | --- | --- | --- |
 | 2026-11-15 | 初版创建：完成全项目勘察，登记 10 项已知问题、5 项待确认事项 | AI Agent（文档体系建设任务） |
 | 2026-11-15 | 配置系统落地（feat/config-system）：新增 `config.toml`/`config.example.toml`/`config_loader.py`；Cookie 自 `cookie.txt` 迁入 `server.default_cookie` 并废弃 `cookie.txt`（`git rm` + .gitignore/.dockerignore 排除）；`main.py` 绑定地址/端口接入配置；`qr_login.py` Cookie 存取改走 config.toml；实证事实 2 改写，新增事实 21/22；新增自检脚本 `tests/test_config_system.py` | AI Agent |
+| 2026-11-15 | 统一日志系统落地（feat/logging-system）：新增 `logger.py`（GIN 风格，控制台彩色 + `logs/service.log` 5MB 轮转），废除 music_api.log 双写；请求行由 after_request 单点输出；DOWNLOADER 组件接入（已知问题 #6 修复）；实证事实 1 改写、新增事实 23；新增自检脚本 `tests/test_logging_system.py` | AI Agent |

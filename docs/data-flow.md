@@ -11,7 +11,7 @@
 客户端请求
    │
    ▼
-before_request：记录「方法 路径 - IP - User-Agent」到日志
+before_request：request.environ 记录 perf_counter() 起始时间
    │
    ▼
 Flask 路由分发（每个业务路由均注册小写/大写别名两条规则）
@@ -34,10 +34,11 @@ _get_cookies() → load_cookies()：每次请求都实时读取 config.toml 的 
 整理为前端期望结构 → APIResponse.success / APIResponse.error
    │
    ▼
-after_request：追加 4 个 CORS 头，记录响应状态码日志
+after_request：追加 4 个 CORS 头，输出单条 GIN 风格请求行
+（[SERVER] 时间 | 状态码 | 微秒耗时 | IP | METHOD 路径，见 docs/deployment.md 第 5 节）
 ```
 
-异常处理分工：`APIException` 与一般异常在各路由内捕获并转为 500 响应；Flask 级 `400/404/500` 错误处理器兜底为统一文案。
+异常处理分工：`APIException` 与一般异常在各路由内捕获并转为 500 响应；Flask 级 `400/404/500` 错误处理器兜底为统一文案。注意：日志只记录路由路径与状态码等元信息，不记录请求体（为用户自带 Cookie 的不落日志约束打底）。
 
 ## 2. ID 与链接解析流（`_extract_music_id`）
 
@@ -171,7 +172,7 @@ finally：删除封面临时文件与残留 .tagging 文件
 | --- | --- | --- | --- |
 | `config.toml` | 人工 / `qr_login.py` / 服务启动读取 | 部署时从模板复制并填写 | Git 不跟踪（.gitignore、.dockerignore 均已排除） |
 | `cookie.backup.*.txt` | `qr_login.py` | 覆盖/清除 Cookie 前 | 无自动清理，Git 不跟踪 |
+| `logs/service.log`（+ 轮转备份） | `logger.py` | 每次请求与组件事件 | 5MB 轮转保留 3 份，Git 不跟踪 |
 | `downloads/歌手 - 歌名.扩展名` | `MusicDownloader` | 每次下载 | 无自动清理，同名跳过（按下载器命名） |
 | `downloads/*.tagging.*` | ffmpeg 临时输出 | 元数据写入期间 | 成功后 move、失败后 finally 删除 |
 | `downloads/tmp*/***.jpg`（mkstemp） | 封面下载 | 元数据写入期间 | finally 删除 |
-| `music_api.log` | `main.py` 日志 | 每次请求与启动 | 无轮转，持续追加 |

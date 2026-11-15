@@ -20,7 +20,7 @@
 | `downloads_dir` | `downloads` | 下载目录（相对项目根） |
 | `max_file_size` | 500MB | 仅在 `/api/info` 中展示，**无实际限制逻辑** |
 | `request_timeout` | 30 | 仅在 `/api/info` 中展示，**未传递给上游调用**（上游超时硬编码在 `music_api`） |
-| `log_level` | `INFO` | 日志级别 |
+| `log_level` | `INFO` | 统一日志级别（`SERVER` 组件，经 `logger.get_logger` 生效） |
 | `cors_origins` | `*` | CORS 允许来源 |
 
 注意：`max_file_size` 与 `request_timeout` 是展示性配置，代码中无对应执行逻辑，调整它们不会改变行为。`host`/`port` 的 dataclass 默认值仅在 `config.toml` 缺失对应键时生效；正常运行取值来自 `config.toml`。
@@ -34,13 +34,13 @@
 
 ## 4. 服务类 `MusicAPIService`
 
-实例化时机：**模块导入时**（`api_service = MusicAPIService(config)`），即 `import main` 就会产生副作用：初始化 `NeteaseAPI`、`MusicDownloader`、创建 `downloads/` 目录、配置双通道 logger。
+实例化时机：**模块导入时**（`api_service = MusicAPIService(config)`），即 `import main` 就会产生副作用：初始化 `NeteaseAPI`、`MusicDownloader`、创建 `downloads/` 目录、初始化 `SERVER` 统一日志器。
 
 关键内部方法：
 
 | 方法 | 行为要点 |
 | --- | --- |
-| `_setup_logger` | logger 名 `music_api`；控制台 + 文件双 handler；文件为 `music_api.log`；仅首次添加 handler |
+| 日志 | `get_logger("SERVER", config.log_level)`：GIN 风格统一日志（`logger.py`），控制台 ANSI 着色 + `logs/service.log` 5MB 轮转 ×3（无着色） |
 | `_get_cookies` | 调 `load_cookies()` 每请求实时读 `config.toml` 的 `server.default_cookie`；未配置打 warning 返回 `{}`；异常返回 `{}` 不中断 |
 | `_extract_music_id` | 短链 `163cn.tv` 展开（不跟随重定向取 Location）→ `music.163.com` 提取 `id=` → 否则原样 strip；任何异常返回原串 |
 | `_format_file_size` | B/KB/MB/GB/TB 自动换算，两位小数 |
@@ -52,8 +52,8 @@
 
 | 钩子 | 行为 |
 | --- | --- |
-| `before_request` | 记录「方法 路径 - IP - User-Agent」 |
-| `after_request` | 追加 4 个 CORS 头（Allow-Origin `*`、Allow-Headers、Allow-Methods `GET,POST,OPTIONS`、Max-Age 3600）；记录响应状态码 |
+| `before_request` | `request.environ` 记录 `perf_counter()` 起始时间（供请求行耗时统计） |
+| `after_request` | 追加 4 个 CORS 头（Allow-Origin `*`、Allow-Headers、Allow-Methods `GET,POST,OPTIONS`、Max-Age 3600）；输出单条 GIN 风格请求行（`[SERVER] 时间 \| 状态码 \| 微秒耗时 \| IP \| METHOD 路径`） |
 | `errorhandler(400/404/500)` | 统一转为 `APIResponse.error` 文案（「请求参数错误」「请求的资源不存在」「服务器内部错误」） |
 
 ## 6. 路由清单与实现要点
