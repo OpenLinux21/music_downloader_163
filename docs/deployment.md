@@ -57,6 +57,16 @@ python music_downloader.py <music_id> [quality] [--download]  # 命令行查询/
 
 获取可用 Cookie 的替代路径：在能正常登录的终端中运行 `python -c "from music_api import qr_login; print(qr_login())"`，按提示扫码后将输出粘贴到 `config.toml` 的 `server.default_cookie`（或运行 `python qr_login.py` 交互菜单的保存功能）。
 
+开发期验证（ruff + pytest，可选）：
+
+```bash
+.venv/bin/ruff check .                    # 代码检查（提交前须全仓零告警，规则见 ruff.toml）
+.venv/bin/python -m pytest tests/ -v      # 全量测试（默认纯本地，约 6 秒，57 个用例）
+.venv/bin/python -m pytest -m upstream    # 真实上游端到端（3 个用例，消耗带宽与磁盘，须用户逐次授权）
+```
+
+ruff 0.17.5 与 pytest 9.2.0 为开发依赖（装于 `.venv`，未写入 `requirements.txt`）；测试配置见 `pytest.ini` 与 `tests/conftest.py`（默认 `-m "not upstream"` 跳过上游端到端）。
+
 ## 3. Docker 部署
 
 ### 3.1 镜像说明

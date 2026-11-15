@@ -29,11 +29,12 @@ Netease_url/
 │   ├── index.html / vite.config.js / package.json / package-lock.json
 │   └── src/                 # App.jsx（页面组件）、api.js（API 封装）、main.jsx、styles.css
 ├── requirements.txt        # Python 依赖（33 个包，全部固定版本；2026-11-15 移除 Flask 系，新增 FastAPI/uvicorn/slowapi）
+├── ruff.toml / pytest.ini  # 开发工具链配置：ruff 代码检查门禁（E/F/I/B/UP）与 pytest 测试入口（2026-11-16 引入）
 ├── Dockerfile              # 多阶段构建：node:22-alpine 构建前端 → python:3.12-alpine3.23 + ffmpeg 运行
 ├── docker-compose.yml      # 单服务编排（可选挂载 config.toml）
 ├── entrypoint.sh           # 容器启动脚本：生成默认配置后调用 python3 start.py
-├── README.md / 使用文档.md  # 面向使用者的说明（部分内容与代码存在出入，以本文档体系为准）
-├── tests/                  # 断言式自检脚本（无测试框架，直接运行）
+├── README.md                   # 面向使用者的说明（2026-11-16 基于代码实证重写；过时的「使用文档.md」已移除）
+├── tests/                  # pytest 测试套件（统一入口 python -m pytest tests/ -v；真实上游端到端标记 upstream 默认跳过）
 ├── downloads/              # 遗留下载产物目录（2026-11-15 起由 storage/ 取代，无新写入，已 gitignore）├── storage/                # 音乐存储与元数据库（运行时生成，按歌曲 ID 分类，已 gitignore）
 └── logs/                   # 统一日志目录（service.log + 轮转备份，已被 .gitignore 覆盖）
 ```
@@ -52,8 +53,9 @@ Netease_url/
 | 配置 | TOML，标准库 `tomllib` 解析；`config.toml` 为唯一配置来源（缺省回落内置默认值） | `config_loader.py` |
 | 日志 | 标准库 `logging` + 自研 GIN 风格 formatter：控制台（ANSI 着色）+ `logs/service.log`（5MB 轮转 ×3，无着色） | `logger.py` |
 | 存储 | sqlite3 标准库（`storage/root.db`：songs/files 表 + `storage/sha256sum.db`：file_hashes 哈希表，无 ORM）+ 按歌曲 ID 分类目录；`main.py` 引入时新建设计文档 `docs/database.md` | `storage_manager.py` |
+| 开发工具链 | ruff 0.17.5（代码检查，规则集 E/F/I/B/UP，提交前全仓零告警）+ pytest 9.2.0（测试框架，`python -m pytest tests/ -v` 为唯一测试入口）；两者为开发依赖（装于 `.venv`，不入 `requirements.txt`） | `ruff.toml`、`pytest.ini`、`tests/conftest.py` |
 
-依赖全部在 `requirements.txt` 中固定版本，无数据库驱动、无 ORM、无任务队列、无 CI 配置；Python 侧无测试框架（自检脚本见 `tests/`），前端经 `vite build` 验证。
+依赖全部在 `requirements.txt` 中固定版本，无数据库驱动、无 ORM、无任务队列、无 CI 配置；Python 侧测试由 pytest 管理（`tests/`，57 个本地用例 + 3 个上游端到端用例默认跳过），代码检查由 ruff 门禁约束（提交前 `ruff check .` 全仓零告警），前端经 `vite build` 验证。
 
 ## 4. 模块依赖关系
 

@@ -32,17 +32,17 @@
 
 ## 3. 标准验证方式
 
-本项目无测试框架，按改动范围选择验证方式，结果必须如实报告（完整规则见 `docs/skills/!dev.md`）：
+Python 侧测试由 pytest 统一管理（`tests/`，2026-11-16 起），统一入口：`python -m pytest tests/ -v`（默认纯本地）；代码检查由 ruff 门禁约束（`ruff.toml`，提交前须全仓零告警）。按改动范围选择验证方式，结果必须如实报告（完整规则见 `docs/skills/!dev.md`）：
 
 | 改动范围 | 标准验证方式 |
 | --- | --- |
-| 任何 Python 改动 | `.venv/bin/python -c "import main, music_api, music_downloader, qr_login"`（导入冒烟，确认无语法/导入错误） |
-| 路由/接口改动 | 在上条基础上用 `main.app.test_client()` 对受影响路由做本地请求验证（无参数校验分支、错误分支必测） |
-| 下载器改动 | 用 `python music_downloader.py <测试ID>` 验证信息获取；**下载与元数据写入需用户授权**（消耗上游与磁盘） |
+| 任何 Python 改动 | `ruff check .`（全仓零告警）+ `python -m pytest tests/ -v`（全量绿灯；快速冒烟可用 `.venv/bin/python -c "import main, music_api, music_downloader, qr_login"`） |
+| 路由/接口改动 | 在上条基础上用 `fastapi.testclient.TestClient(main.app)` 对受影响路由补断言或本地请求验证（无参数校验分支、错误分支必测） |
+| 下载器改动 | 用 `python music_downloader.py <测试ID>` 验证信息获取；**下载与元数据写入需用户授权**（消耗上游与磁盘）；相关端到端断言位于 `tests/test_download_metadata.py`（标记 upstream） |
 | 纯文档改动 | 检查文档间引用路径有效、无内部矛盾；`git diff` 确认未触碰代码 |
 | 部署配置改动 | 静态检查配置语法（如 `docker-compose config`）；构建类验证需用户授权 |
 
-禁止在验证中发起真实上游解析/下载消耗（`/song`、`/download` 成功路径），除非用户明确要求。
+**真实上游端到端用例**（`tests/` 中 3 个，标记 `@pytest.mark.upstream`）默认被 `-m "not upstream"` 跳过，须用户逐次授权后以 `python -m pytest -m upstream` 显式运行。禁止在验证中发起真实上游解析/下载消耗（`/song`、`/download` 成功路径），除非用户明确要求。
 
 ## 4. 文档间引用规范
 
