@@ -6,7 +6,7 @@
 2. ANSI 着色：控制台变体带颜色、文件变体无转义码
 3. get_logger：同组件复用实例、双 handler（控制台 + 轮转文件）
 4. 落盘：logs/service.log 存在且无 ANSI 码
-5. 集成：Flask test_client 请求后产生且仅产生一条 SERVER 请求行
+5. 集成：FastAPI TestClient 请求后产生且仅产生一条 SERVER 请求行
 6. 旧方案废除：导入 main 后不再生成 music_api.log
 7. Werkzeug 自带请求日志被压制
 
@@ -98,13 +98,14 @@ def test_file_output() -> None:
 def test_flask_integration() -> None:
     import main
     assert not (ROOT / "music_api.log").exists(), "旧 music_api.log 仍被生成"
-    client = main.app.test_client()
+    from fastapi.testclient import TestClient
+    client = TestClient(main.app)
     before = len([l for l in _file_lines() if l.startswith("[SERVER]")])
     resp = client.get("/health")
     assert resp.status_code == 200
     server_lines = [l for l in _file_lines() if l.startswith("[SERVER]")]
     assert len(server_lines) == before + 1, f"请求数不符: {before} -> {len(server_lines)}"
-    assert re.search(rf"\[SERVER\] {TS} \| 200 \| {US} \| 127\.0\.0\.1 \| GET /health", server_lines[-1]), \
+    assert re.search(rf"\[SERVER\] {TS} \| 200 \| {US} \| (127\.0\.0\.1|testclient) \| GET /health", server_lines[-1]), \
         f"请求行不匹配: {server_lines[-1]!r}"
     print("通过: Flask 请求产生单一 GIN 风格请求行，旧 music_api.log 已废除")
 
@@ -120,9 +121,12 @@ def test_downloader_component() -> None:
 
 
 def test_werkzeug_quiet() -> None:
-    lg.quiet_http_server_logs()
-    assert logging.getLogger("werkzeug").level == logging.ERROR
-    print("通过: Werkzeug 自带请求日志已压制")
+    """迁移 FastAPI/uvicorn 后无 Werkzeug；uvicorn access log 由 start.py 显式关闭"""
+    import inspect
+    from pathlib import Path as _Path
+    src = (_Path(__file__).resolve().parent.parent / "start.py").read_text(encoding="utf-8")
+    assert "access_log=False" in src, "uvicorn access log 未关闭（会与统一请求行重复）"
+    print("通过: uvicorn access log 已关闭（统一请求行单点输出）")
 
 
 def main() -> None:

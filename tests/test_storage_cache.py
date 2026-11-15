@@ -226,10 +226,11 @@ def test_route_cache_hit(tmp: Path) -> None:
     sm.register_file(song_id, "lossless", f, f.stat().st_size)
     before = sm.song_stats(song_id)["visit_count"]
 
-    client = main.app.test_client()
+    from fastapi.testclient import TestClient
+    client = TestClient(main.app)
     resp = client.post("/download", json={"id": str(song_id), "quality": "lossless",
                                           "format": "json"})
-    data = resp.get_json()
+    data = resp.json()
     assert resp.status_code == 200 and data["success"], data
     assert data["data"]["cached"] is True and data["data"]["name"] == "缓存路由测试"
     assert sm.song_stats(song_id)["visit_count"] == before + 1

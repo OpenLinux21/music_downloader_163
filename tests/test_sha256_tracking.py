@@ -151,20 +151,21 @@ def test_end_to_end(tmp: Path) -> None:
     """真实上游端到端（用户已授权）：未命中登记 → 命中校验 → 篡改重下 → 再命中"""
     import main
     sm = main.api_service.storage
-    client = main.app.test_client()
+    from fastapi.testclient import TestClient
+    client = TestClient(main.app)
     song_id, quality = 347230, "lossless"
 
     # 若此前存在该音质缓存（如重跑本脚本），清理以保证首次下载路径可测
     sm.invalidate_file(song_id, quality)
 
     r1 = client.post("/download", json={"id": str(song_id), "quality": quality, "format": "json"})
-    d1 = r1.get_json()
+    d1 = r1.json()
     assert r1.status_code == 200 and d1["data"]["cached"] is False, d1
     main_path = Path(d1["data"]["file_path"])
     assert sm.verify_hash(main_path), "下载登记后哈希校验应通过"
 
     r2 = client.post("/download", json={"id": str(song_id), "quality": quality, "format": "json"})
-    assert r2.get_json()["data"]["cached"] is True, "哈希一致应命中复用"
+    assert r2.json()["data"]["cached"] is True, "哈希一致应命中复用"
 
     # 篡改 1 字节 → 服务端校验失败 → 删除重下 → 重新登记哈希 → 再提供
     # 注意：read 后需回 seek 再写，确保目标字节必然翻转（否则可能写入相同值）
@@ -174,12 +175,12 @@ def test_end_to_end(tmp: Path) -> None:
         fh.seek(1024)
         fh.write(b"\x00" if original != b"\x00" else b"\x01")
     r3 = client.post("/download", json={"id": str(song_id), "quality": quality, "format": "json"})
-    d3 = r3.get_json()
+    d3 = r3.json()
     assert r3.status_code == 200 and d3["data"]["cached"] is False, d3
     assert sm.verify_hash(main_path), "重新下载后哈希应重新登记并通过"
 
     r4 = client.post("/download", json={"id": str(song_id), "quality": quality, "format": "json"})
-    assert r4.get_json()["data"]["cached"] is True
+    assert r4.json()["data"]["cached"] is True
     print(f"通过: 端到端（登记→命中→篡改重下→再命中，文件 {main_path.name}）")
 
 

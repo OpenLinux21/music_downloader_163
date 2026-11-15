@@ -23,6 +23,7 @@
 | 哈希追踪 | `feat/sha256-tracking` 分支（2026-11-15） | `sha256sum.db` 全量文件哈希登记 + 命中前校验 + 损坏失效重下链路 |
 | 下载与元数据 | `feat/download-metadata` 分支（2026-11-15） | 歌词嵌入（三格式实测）+ 多线程 Range 下载（自动回退）+ KB/s 限速 |
 | 用户自有凭据 | `feat/user-cookie` 分支（2026-11-15） | `/download` 请求级凭据（localStorage + 内存使用零持久化）+ 前端 Cookie 入口 |
+| FastAPI 迁移 | `feat/fastapi-migration` 分支（2026-11-15） | Flask → FastAPI（uvicorn）；大写别名移除；slowapi 限速；依赖清单重构 |
 
 ## 2. 重要设计决策及动机（依据代码现状推断与提交记录）
 
@@ -111,6 +112,13 @@
 安全验证：以独特哨兵值 Cookie 走完「缓存命中」「缓存缺失（打桩捕获参数）」「真实上游调用（哨兵凭据，上游 404 拒绝）」三条链路后，逐一 grep 日志文件、两个 sqlite 库（二进制安全）、storage 全部文件与 config.toml，均无残留。
 取舍：凭据字段仅覆盖 `/download`（解析类接口保持默认 Cookie，按用户需求最小范围实现）；凭据完全替代而非合并默认 Cookie（用户自己的凭据语义更直观）；`type=password` 输入框防肩窥，XSS 风险由 React 重写（第十一步）时的生态进一步收敛。
 边界说明：请求结束即释放的「内存清除」依赖局部变量生命周期（CPython 引用计数即时回收），不做显式 zero-fill（Python 字符串不可变，zero-fill 无法保证，属于语言层限制，实际风险面为进程内存转储场景，个人服务可接受）。
+
+### 2.15 Flask → FastAPI 迁移（2026-11-15，feat/fastapi-migration）
+
+决策：`main.py` 重写为 FastAPI 应用（uvicorn ASGI 托管，`access_log=False` 由统一日志单点输出请求行）；大写别名路由全部移除（前端同步改小写）；slowapi 按来源 IP 对业务五路由叠加分钟/小时双阈值限速（读 `api.*` 配置，超限 429 统一结构）；`/` 经 FileResponse 托管旧页面过渡，`/docs` 自动文档开放；依赖清单移除 Flask/Werkzeug/blinker/itsdangerous/Jinja2/MarkupSafe/click/colorama，新增 fastapi/uvicorn/slowapi/httpx 及传递依赖（33 包全固定版本）。
+动机：用户要求的公开 API 与按 IP 限速能力在 Flask 生态需要额外拼装（限速/异步支持均不如 FastAPI+slowapi 成熟），且 FastAPI 的依赖注入与异常处理器使统一取参/统一响应更整洁。
+取舍：路由保持同步 `def`（自动入线程池），不做 async 化——上游调用与 sqlite/ffmpeg 均为同步阻塞实现，async 化收益低而风险高；限速存储用 `memory://`（单进程语义，多进程部署需升级共享存储）；大写别名直接移除而非保留（前端同仓库可控，破坏性变更已在 `docs/api.md` 顶部与知识库标注）。
+破坏性变更清单：①`/Song_V1`、`/Search`、`/Playlist`、`/Album`、`/Download` 路径不再可用；②`colorama` 等依赖移除（外部复用 `requirements.txt` 的部署需重新 `pip install -r`）；③Python 层导入 `main.app` 的集成方式由 Flask test_client 变为 `fastapi.testclient.TestClient`。
 
 ## 3. 历史遗留与不一致（详见 docs/knowledge-base.md）
 

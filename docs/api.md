@@ -12,7 +12,9 @@
 | 请求方式 | GET / POST；POST 同时接受 JSON 体与表单（JSON 优先） |
 | 响应格式 | JSON（`/download` 默认返回音频文件流，`format=json` 时返回 JSON） |
 | 鉴权 | 无。服务不校验调用方身份；上游鉴权依赖 `config.toml` 中服务器默认 Cookie |
-| CORS | 全部响应允许任意来源（`Access-Control-Allow-Origin: *`） |
+| 限速 | slowapi 按来源 IP：业务路由（`/search` `/song` `/playlist` `/album` `/download`）默认 10 次/分钟 + 25 次/小时（读自 `config.toml` 的 `api.*`），超限返回 429 统一结构；`/health`、`/api/info`、`/` 不限速（监控可用性优先） |
+| CORS | 跨域请求允许任意来源（`Access-Control-Allow-Origin: *`，CORSMiddleware 实现） |
+| Web 框架 | FastAPI（uvicorn 托管）；**2026-11-15 由 Flask 迁移，大写别名路由（`/Song_V1` 等）已移除，属破坏性变更，前端调用已同步改为小写路径** |
 
 ## 2. 统一响应结构
 
@@ -82,7 +84,7 @@
 
 说明：`cookie_status` 仅表示 `config.toml` 的 `server.default_cookie` 是否解析出非空 Cookie（`valid`/`invalid`），**不代表登录态真实有效**；`timestamp` 为 Unix 秒级时间戳。
 
-### 4.3 `GET|POST /song`（别名 `/Song_V1`）— 歌曲信息
+POST /song`（别名 `/Song_V1`）— 歌曲信息|POST /song`（别名 `/Song_V1`）— 歌曲信息
 
 | 参数 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
@@ -107,7 +109,7 @@ POST /song {"id":"123","level":"xxx"}
 → 400 {"status":400, "success":false, "message":"无效的音质参数，支持: standard, exhigh, lossless, hires, sky, jyeffect, jymaster, dolby"}
 ```
 
-### 4.4 `GET|POST /search`（别名 `/Search`）— 搜索
+### 4.4 `GET|POST /search` — 搜索
 
 | 参数 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
@@ -133,7 +135,7 @@ POST /song {"id":"123","level":"xxx"}
 
 说明：`artists` 为 `/` 分隔的歌手串；`artist_string` 为路由层追加的重复字段（与 `artists` 同值），为兼容旧前端而保留。
 
-### 4.5 `GET|POST /playlist`（别名 `/Playlist`）— 歌单详情
+### 4.5 `GET|POST /playlist` — 歌单详情
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
@@ -142,7 +144,7 @@ POST /song {"id":"123","level":"xxx"}
 `data` 结构：`{status: "success", playlist: {id, name, coverImgUrl, creator, trackCount, description, tracks}}`。
 `tracks` 为数组，元素 `{id, name, artists, album, picUrl}`；歌曲详情按每批 100 个 ID 向上游补全。
 
-### 4.6 `GET|POST /album`（别名 `/Album`）— 专辑详情
+### 4.6 `GET|POST /album` — 专辑详情
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
@@ -151,7 +153,7 @@ POST /song {"id":"123","level":"xxx"}
 `data` 结构：`{status: 200, album: {id, name, coverImgUrl, artist, publishTime, description, songs}}`。
 `songs` 元素 `{id, name, artists, album, picUrl}`；封面直链由服务端封面算法生成。
 
-### 4.7 `GET|POST /download`（别名 `/Download`）— 下载音乐
+### 4.7 `GET|POST /download` — 下载音乐
 
 | 参数 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
@@ -209,6 +211,7 @@ POST /song {"id":"123","level":"xxx"}
 
 | HTTP | 典型 message | 触发场景 |
 | --- | --- | --- |
+| 429 | `请求过于频繁，请稍后再试` | 业务路由超过每 IP 限速阈值（默认 10/分钟或 25/小时） |
 | 400 | `必须提供 'ids'、'id' 或 'url' 参数` | `/song` 缺参数 |
 | 400 | `参数 'xxx' 不能为空` | 通用参数校验 |
 | 400 | `无效的音质参数，支持: ...` | 音质不在 8 项列表 |
