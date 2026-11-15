@@ -1,8 +1,9 @@
-"""存储与缓存管理模块（storage/ 目录体系 + root.db）
+"""存储与缓存管理模块（storage/ 目录体系 + root.db + sha256sum.db）
 
 目录布局（运行时生成，整体被 .gitignore 排除）：
     storage/
     ├── root.db                          # sqlite3 元数据库（songs / files 表）
+    ├── sha256sum.db                     # sqlite3 哈希追踪库（file_hashes 表）
     ├── <song_id>/                       # 每首歌曲一个文件夹
     │   ├── <歌曲名>.<ext>                # 各音质音频（扩展名冲突时加音质段，见下）
     │   ├── cover.jpg                    # 专辑封面
@@ -12,14 +13,18 @@
 命名规则：默认以「歌曲名.实际扩展名」命名；若同一扩展名已被另一音质占用
 （如 standard 与 exhigh 均为 mp3），则追加音质段：「歌曲名.<quality>.<ext>」。
 
+哈希追踪（sha256sum.db）：任何文件进入 storage 时计算并登记 SHA-256
+（音频主文件、专辑副本、封面、歌词）；缓存命中对外提供下载前重算比对，
+不一致（含无记录）判定为损坏 → 删除该音质文件与副本并重新下载。
+
 缓存语义：以 (song_id, quality) 为缓存键（见 files 表 UNIQUE 约束），命中即复用
 文件并累加 songs.visit_count；不再按文件名猜测（修复原 /download 缓存检查失效问题）。
 
 清理策略（cleanup，启动时与守护线程周期执行）：
     1. 到期删除：歌曲首次入库（songs.created_at）超过 retention_days（默认 90 天）
-       → 删除整个歌曲目录及专辑副本目录，并清理 DB 行；
+       → 删除整个歌曲目录及专辑副本目录，并清理 DB 行（含哈希记录）；
     2. 超限淘汰：全部文件总大小超过 max_total_mb → 按 visit_count 由少到多
-       整歌淘汰（含专辑副本），直至总大小回到上限内。
+       整歌淘汰（含专辑副本与哈希记录），直至总大小回到上限内。
 
 数据库：每次操作独立短连接（sqlite3 标准库，无 ORM），规避跨线程连接问题；
 写并发由 sqlite 内置锁兜底（个人规模足够）。
@@ -27,6 +32,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import sqlite3
 import time
@@ -58,8 +64,10 @@ class StorageManager:
         self.max_total_mb = max_total_mb
         self.retention_days = retention_days
         self.db_path = self.storage_dir / "root.db"
+        self.hash_db_path = self.storage_dir / "sha256sum.db"
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        self._init_hash_db()
 
     # ----------- 数据库 -----------
 
@@ -101,6 +109,91 @@ class StorageManager:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_files_song ON files(song_id)")
+
+    # ----------- 哈希追踪（sha256sum.db） -----------
+
+    def _connect_hash(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.hash_db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_hash_db(self) -> None:
+        with self._connect_hash() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS file_hashes (
+                    path          TEXT PRIMARY KEY,
+                    sha256        TEXT NOT NULL,
+                    size          INTEGER NOT NULL,
+                    song_id       INTEGER,
+                    quality       TEXT,
+                    registered_at REAL NOT NULL
+                )
+                """
+            )
+
+    @staticmethod
+    def compute_sha256(path: Path) -> str:
+        """流式计算文件 SHA-256（1MB 分块，避免大文件占内存）"""
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def register_hash(self, path: Path, song_id: Optional[int] = None,
+                      quality: Optional[str] = None) -> str:
+        """计算文件哈希并登记/更新（任何文件进入 storage 时调用）"""
+        sha = self.compute_sha256(path)
+        with self._connect_hash() as conn:
+            conn.execute(
+                """
+                INSERT INTO file_hashes (path, sha256, size, song_id, quality, registered_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    sha256 = excluded.sha256,
+                    size = excluded.size,
+                    song_id = excluded.song_id,
+                    quality = excluded.quality,
+                    registered_at = excluded.registered_at
+                """,
+                (self._rel_path(path), sha, path.stat().st_size, song_id, quality, time.time()),
+            )
+        return sha
+
+    def verify_hash(self, path: Path) -> bool:
+        """校验文件完整性：重算 SHA-256 与记录比对；无记录/文件缺失/不一致均为 False"""
+        if not path.is_file():
+            return False
+        with self._connect_hash() as conn:
+            row = conn.execute(
+                "SELECT sha256 FROM file_hashes WHERE path = ?", (self._rel_path(path),)
+            ).fetchone()
+        if not row:
+            return False
+        return self.compute_sha256(path) == row["sha256"]
+
+    def remove_hash(self, path: Path) -> None:
+        with self._connect_hash() as conn:
+            conn.execute("DELETE FROM file_hashes WHERE path = ?", (self._rel_path(path),))
+
+    def invalidate_file(self, song_id: int, quality: str) -> None:
+        """损坏处理：删除指定音质的主文件与专辑副本、files 行及哈希记录
+
+        保留 songs 行与封面/歌词（其哈希记录不受影响）。
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT path FROM files WHERE song_id = ? AND quality = ?",
+                (song_id, quality),
+            ).fetchall()
+            conn.execute(
+                "DELETE FROM files WHERE song_id = ? AND quality = ?", (song_id, quality)
+            )
+        for row in rows:
+            path = self.storage_dir / row["path"]
+            path.unlink(missing_ok=True)
+            self.remove_hash(path)
 
     # ----------- 路径 -----------
 
@@ -251,7 +344,7 @@ class StorageManager:
         return int(row["total"])
 
     def _remove_song(self, conn: sqlite3.Connection, song_id: int) -> int:
-        """按歌曲粒度删除：song 目录 + 专辑副本目录 + files 行；返回释放字节数"""
+        """按歌曲粒度删除：song 目录 + 专辑副本目录 + files 行 + 哈希记录；返回释放字节数"""
         row = conn.execute(
             "SELECT COALESCE(SUM(size), 0) AS total FROM files WHERE song_id = ?",
             (song_id,),
@@ -259,6 +352,8 @@ class StorageManager:
         freed = int(row["total"])
         conn.execute("DELETE FROM files WHERE song_id = ?", (song_id,))
         conn.execute("DELETE FROM songs WHERE song_id = ?", (song_id,))
+        with self._connect_hash() as hconn:
+            hconn.execute("DELETE FROM file_hashes WHERE song_id = ?", (song_id,))
         shutil.rmtree(self.song_dir(song_id), ignore_errors=True)
         # 专辑副本目录（song 可能归属专辑，逐个探测删除）
         for album_dir in self.albums_dir.glob(f"*/{song_id}"):

@@ -50,13 +50,13 @@ MusicDownloader(storage_dir="storage", max_concurrent=3, ffmpeg_path=None,
 下载完成后统一执行（同步/异步共用）：
 
 1. `register_song`：登记歌曲元数据（UPSERT，保留累计访问量）；
-2. 封面下载一次 → `storage/<song_id>/cover.jpg`（同时作为 ffmpeg 嵌入源，`_write_metadata_with_ffmpeg` 的 `cover_local` 参数）；
-3. 歌词 → `storage/<song_id>/lyric.lrc`（空歌词跳过）；
+2. 封面下载一次 → `storage/<song_id>/cover.jpg`（同时作为 ffmpeg 嵌入源，`_write_metadata_with_ffmpeg` 的 `cover_local` 参数）+ `register_hash`；
+3. 歌词 → `storage/<song_id>/lyric.lrc`（空歌词跳过）+ `register_hash`；
 4. ffmpeg 写元数据与封面（失败不阻断）；
-5. `register_file`：登记音质文件（**在元数据写入之后取大小**，保证 DB 与落盘一致）；
-6. 归属专辑（`album_id` 非空）→ `copy2` 副本至 `storage/albums/<album_id>/<song_id>/`（含封面歌词）并以 `is_copy=1` 登记。
+5. `register_file`：登记音质文件（**在元数据写入之后取大小**，保证 DB 与落盘一致）+ `register_hash`；
+6. 归属专辑（`album_id` 非空）→ `copy2` 副本至 `storage/albums/<album_id>/<song_id>/`（含封面歌词）并以 `is_copy=1` 登记 + 各副本 `register_hash`。
 
-缓存命中（`get_cached_file`）时整个后处理流程跳过，改由 root.db 记录构建 `MusicInfo`（`_music_info_from_record`），不发起上游调用。
+缓存命中（`get_cached_file`）时先执行 `verify_hash`（重算 SHA-256 比对 `sha256sum.db`）：一致则复用并由 root.db 记录构建 `MusicInfo`（`_music_info_from_record`），不发起上游调用；不一致或无记录判定损坏，`invalidate_file` 删除该音质主文件与副本后进入重新下载分支（重下后重新完成元数据写入并重新登记哈希）。
 
 ## 4. 信息获取 `get_music_info(music_id, quality)`
 
@@ -71,7 +71,7 @@ MusicDownloader(storage_dir="storage", max_concurrent=3, ffmpeg_path=None,
 | `download_music_to_memory` | requests 一次性读入 | 否（BytesIO） | 否 | 无（预留） |
 | `download_batch_async` | asyncio + `Semaphore(max_concurrent)` 并发包装异步下载 | 是 | 是 | 无（预留） |
 
-共性逻辑（2026-11-15 缓存键化后）：先查 `storage.get_cached_file(song_id, quality)`，命中直接复用（`cached=true`，不重写元数据、不发起上游调用）；未命中才下载（先写 `.part` 临时文件，完成后原子改名）。网络失败返回 `success=False` 的 `DownloadResult`（不抛异常）；信息获取失败抛 `DownloadException`。
+共性逻辑（2026-11-15 缓存键化 + 哈希校验后）：先查 `storage.get_cached_file(song_id, quality)` 并 `verify_hash` 校验完整性，一致才复用（`cached=true`，不重写元数据、不发起上游调用）；不一致或无记录判定损坏，`invalidate_file` 删除后走重新下载（重下后重新登记哈希）；未命中才下载（先写 `.part` 临时文件，完成后原子改名）。网络失败返回 `success=False` 的 `DownloadResult`（不抛异常）；信息获取失败抛 `DownloadException`。
 
 `download_batch_async` 对每个任务的异常降级为失败结果列表项，保证 `gather` 不中断。
 

@@ -18,7 +18,7 @@ Netease_url/
 ├── main.py                 # Web 服务层：Flask 应用与全部 HTTP 路由（不含启动逻辑）
 ├── music_api.py            # 网易云 API 封装：eapi 加密、HTTP 客户端、二维码登录、Cookie 工具
 ├── music_downloader.py     # 音乐下载器：同步/异步/批量下载、缓存复用、ffmpeg 元数据写入、CLI 入口
-├── storage_manager.py      # 存储与缓存管理：storage/ 布局、root.db（songs/files）、双策略清理
+├── storage_manager.py      # 存储与缓存管理：storage/ 布局、root.db（songs/files）、sha256sum.db（哈希）、双策略清理
 ├── qr_login.py             # 二维码登录 CLI 工具：Cookie 读写/备份/校验（与 music_api 存在接口不匹配，见知识库）
 ├── config_loader.py        # 配置读取模块：tomllib 解析 config.toml、默认值合并、Cookie 读写
 ├── logger.py               # 统一日志模块：GIN 风格格式（控制台彩色 + logs/service.log 轮转）
@@ -50,7 +50,7 @@ Netease_url/
 | 前端 | jQuery 3.7.1、Bootstrap 5.1.3、APlayer 1.10.1（均加载自 `mirrors.sustech.edu.cn` CDN） | `templates/index.html` |
 | 配置 | TOML，标准库 `tomllib` 解析；`config.toml` 为唯一配置来源（缺省回落内置默认值） | `config_loader.py` |
 | 日志 | 标准库 `logging` + 自研 GIN 风格 formatter：控制台（ANSI 着色）+ `logs/service.log`（5MB 轮转 ×3，无着色） | `logger.py` |
-| 存储 | sqlite3 标准库（`storage/root.db`：songs/files 表，无 ORM）+ 按歌曲 ID 分类目录；`main.py` 引入时新建设计文档 `docs/database.md` | `storage_manager.py` |
+| 存储 | sqlite3 标准库（`storage/root.db`：songs/files 表 + `storage/sha256sum.db`：file_hashes 哈希表，无 ORM）+ 按歌曲 ID 分类目录；`main.py` 引入时新建设计文档 `docs/database.md` | `storage_manager.py` |
 
 依赖全部在 `requirements.txt` 中固定版本，无数据库驱动、无 ORM、无任务队列、无测试框架、无 CI 配置。
 
@@ -113,6 +113,7 @@ Netease_url/
 | `config.toml` | 服务配置（绑定地址/端口/缓存上限/下载开关/限速）与服务器默认 Cookie（`server.default_cookie`） | 从 `config.example.toml` 复制后人工填写，或 `qr_login.py` 登录写入；Git 不跟踪 |
 | `cookie.backup.<suffix>.<时间戳>.txt` | Cookie 覆盖/清除前的备份 | `qr_login.py` 的 `_backup_cookie()` |
 | `storage/root.db` | 元数据库：`songs`（元数据与访问量）/ `files`（音质文件登记） | `storage_manager.py` 初始化与登记 |
+| `storage/sha256sum.db` | 哈希追踪库：`file_hashes`（storage 全量文件 SHA-256，命中前校验、损坏失效重下） | `storage_manager.py` 登记与校验 |
 | `storage/<song_id>/` | 单曲资源：各音质音频 + `cover.jpg` + `lyric.lrc` | 下载器落盘（首次下载登记，缓存命中复用） |
 | `storage/albums/<album_id>/<song_id>/` | 归属专辑的歌曲副本 | 下载完成 `copy2` 复制 |
 | `downloads/` | 遗留下载产物（已由 storage/ 取代，无新写入） | 历史运行产生，gitignore |

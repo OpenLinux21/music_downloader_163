@@ -285,9 +285,9 @@ class MusicDownloader:
         try:
             music_id = int(music_id)
 
-            # 缓存命中：直接复用文件，访问计数由调用方（路由层）累加
+            # 缓存命中：先校验哈希，一致才复用（访问计数由调用方累加）
             cached = self.storage.get_cached_file(music_id, quality)
-            if cached is not None:
+            if cached is not None and self.storage.verify_hash(cached):
                 record = self.storage.song_with_file(music_id, quality)
                 if record is not None:
                     return DownloadResult(
@@ -297,6 +297,9 @@ class MusicDownloader:
                         music_info=self._music_info_from_record(record, quality),
                         cached=True,
                     )
+            if cached is not None:
+                self.logger.warning(f"缓存文件哈希校验未通过，删除并重新下载: {cached}")
+                self.storage.invalidate_file(music_id, quality)
 
             music_info = self.get_music_info(music_id, quality)
             file_path = self._build_file_path(music_info)
@@ -352,15 +355,20 @@ class MusicDownloader:
                 pic_resp = requests.get(music_info.pic_url, timeout=10)
                 pic_resp.raise_for_status()
                 cover_local = storage.save_cover(music_info.id, pic_resp.content)
+                storage.register_hash(cover_local, song_id=music_info.id)
             except Exception as e:
                 self.logger.warning(f"封面下载失败，跳过封面保存: {e}")
 
-        storage.save_lyric(music_info.id, music_info.lyric)
+        lyric_path = storage.save_lyric(music_info.id, music_info.lyric)
+        if lyric_path:
+            storage.register_hash(lyric_path, song_id=music_info.id)
 
         self._write_metadata_with_ffmpeg(file_path, music_info, cover_local=cover_local)
 
         storage.register_file(music_info.id, music_info.quality, file_path,
                               file_path.stat().st_size, is_copy=False)
+        # 哈希登记：任何文件进入 storage 都计算并登记 SHA-256
+        storage.register_hash(file_path, song_id=music_info.id, quality=music_info.quality)
 
         # 归属专辑：另存副本到 storage/albums/<album_id>/<song_id>/（含封面歌词）
         if music_info.album_id:
@@ -371,11 +379,17 @@ class MusicDownloader:
                 shutil.copy2(file_path, copy_path)
                 storage.register_file(music_info.id, music_info.quality, copy_path,
                                       copy_path.stat().st_size, is_copy=True)
+                storage.register_hash(copy_path, song_id=music_info.id,
+                                      quality=music_info.quality)
                 if cover_local and not (album_dir / "cover.jpg").exists():
-                    shutil.copy2(cover_local, album_dir / "cover.jpg")
+                    cover_copy = album_dir / "cover.jpg"
+                    shutil.copy2(cover_local, cover_copy)
+                    storage.register_hash(cover_copy, song_id=music_info.id)
                 lyric_src = storage.song_dir(music_info.id) / "lyric.lrc"
                 if lyric_src.exists() and not (album_dir / "lyric.lrc").exists():
-                    shutil.copy2(lyric_src, album_dir / "lyric.lrc")
+                    lyric_copy = album_dir / "lyric.lrc"
+                    shutil.copy2(lyric_src, lyric_copy)
+                    storage.register_hash(lyric_copy, song_id=music_info.id)
             except Exception as e:
                 self.logger.warning(f"专辑副本保存失败（不影响主文件）: {e}")
 
@@ -408,7 +422,7 @@ class MusicDownloader:
             music_id = int(music_id)
 
             cached = self.storage.get_cached_file(music_id, quality)
-            if cached is not None:
+            if cached is not None and self.storage.verify_hash(cached):
                 record = self.storage.song_with_file(music_id, quality)
                 if record is not None:
                     return DownloadResult(
@@ -418,6 +432,9 @@ class MusicDownloader:
                         music_info=self._music_info_from_record(record, quality),
                         cached=True,
                     )
+            if cached is not None:
+                self.logger.warning(f"缓存文件哈希校验未通过，删除并重新下载: {cached}")
+                self.storage.invalidate_file(music_id, quality)
 
             music_info = self.get_music_info(music_id, quality)
             file_path = self._build_file_path(music_info)
