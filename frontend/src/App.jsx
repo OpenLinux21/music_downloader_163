@@ -4,7 +4,7 @@ import {
   List, Badge, Tag, Space, Popconfirm, message,
 } from 'antd'
 import { SearchOutlined, DownloadOutlined, FireOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { getJSON, postJSON, downloadMusic, getUserCookie, setUserCookie } from './api.js'
+import { getJSON, postJSON, downloadMusic, downloadBatch, getUserCookie, setUserCookie } from './api.js'
 
 const { Header, Content, Footer } = Layout
 const { Title, Text, Paragraph } = Typography
@@ -157,6 +157,47 @@ function SongParseTab() {
   )
 }
 
+// 批量下载操作条：服务端逐首下载并打包 zip（等待时长随曲目数与音质增加）
+function BatchDownloadBar({ tracks, batchName }) {
+  const [quality, setQuality] = useState('lossless')
+  const [loading, setLoading] = useState(false)
+
+  const doBatch = async () => {
+    if (!tracks.length) return
+    setLoading(true)
+    message.loading({ content: `服务端正在下载 ${tracks.length} 首歌曲并打包，请勿关闭页面…`, key: 'batch', duration: 0 })
+    try {
+      const { filename, total, failed } = await downloadBatch({
+        tracks: tracks.map((t) => ({ id: String(t.id), name: t.name, artists: t.artists })),
+        quality,
+        name: batchName,
+        userCookie: getUserCookie(),
+      })
+      message.success({
+        content: failed > 0
+          ? `批量完成：${filename}（成功 ${total - failed}/${total} 首，${failed} 首因版权或 Cookie 限制跳过）`
+          : `批量完成：${filename}（${total} 首全部成功）`,
+        key: 'batch',
+        duration: 6,
+      })
+    } catch (e) {
+      message.error({ content: e.message, key: 'batch', duration: 6 })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Space style={{ marginTop: 12 }} wrap>
+      <Select value={quality} onChange={setQuality} style={{ width: 150 }} options={QUALITIES} />
+      <Button icon={<DownloadOutlined />} loading={loading} onClick={doBatch}>
+        批量下载（{tracks.length} 首）
+      </Button>
+      <Text type="secondary" style={{ fontSize: 12 }}>服务端打包 zip，单批最多 100 首</Text>
+    </Space>
+  )
+}
+
 function PlaylistTab() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -197,6 +238,7 @@ function PlaylistTab() {
           <Title level={5}>{data.name || '未命名歌单'}（{tracks.length} 首）</Title>
           <Table size="small" rowKey="id" columns={columns} dataSource={tracks}
                  pagination={{ pageSize: 10 }} />
+          {tracks.length > 0 && <BatchDownloadBar tracks={tracks} batchName={data.name} />}
         </div>
       )}
     </div>
@@ -224,7 +266,8 @@ function AlbumTab() {
     }
   }
 
-  const tracks = Array.isArray(data?.tracks) ? data.tracks : []
+  // 后端 /album 返回的曲目字段名为 songs（music_api.get_album_detail）
+  const tracks = Array.isArray(data?.songs) ? data.songs : []
   const columns = [
     { title: '歌曲', dataIndex: 'name', key: 'name' },
     { title: '歌手', dataIndex: 'artists', key: 'artists' },
@@ -247,6 +290,7 @@ function AlbumTab() {
           )}
           <Table size="small" rowKey="id" columns={columns} dataSource={tracks}
                  pagination={{ pageSize: 10 }} />
+          {tracks.length > 0 && <BatchDownloadBar tracks={tracks} batchName={data.name} />}
         </div>
       )}
     </div>

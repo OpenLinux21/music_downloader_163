@@ -70,6 +70,42 @@ export function downloadMusic({ id, quality, userCookie }) {
   })
 }
 
+// 批量下载：服务端逐首下载并打包 zip（XHR blob 复用单曲下载的保存体验）
+export function downloadBatch({ tracks, quality, name, userCookie }) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/batch_download', true)
+    xhr.setRequestHeader('Content-Type', 'application/json')
+    xhr.responseType = 'blob'
+    xhr.onload = () => {
+      if (xhr.status !== 200) {
+        // 错误体是 JSON
+        try {
+          const body = JSON.parse(xhr.responseText)
+          reject(new Error(body.message || `批量下载失败（HTTP ${xhr.status}）`))
+        } catch (_) {
+          reject(new Error(`批量下载失败（HTTP ${xhr.status}）`))
+        }
+        return
+      }
+      const encoded = xhr.getResponseHeader('X-Download-Filename')
+      const filename = encoded ? decodeURIComponent(encoded) : 'batch.zip'
+      const num = (key) => Number(xhr.getResponseHeader(key) ?? 0)
+      const url = window.URL.createObjectURL(xhr.response)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+      resolve({ filename, total: num('X-Batch-Total'), success: num('X-Batch-Success'), failed: num('X-Batch-Failed') })
+    }
+    xhr.onerror = () => reject(new Error('网络错误，批量下载失败'))
+    xhr.send(JSON.stringify({ tracks, quality, name, user_cookie: userCookie || '' }))
+  })
+}
+
 // 个人 Cookie：仅存于浏览器 localStorage，随下载请求发送（服务器不持久化）
 const USER_COOKIE_KEY = 'netease_user_cookie'
 

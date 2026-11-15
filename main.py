@@ -11,12 +11,17 @@
 - 静态页过渡期继续使用 templates/index.html（FileResponse 托管，无模板引擎）
 """
 
+import os
 import sys
+import tempfile
 import time
 import traceback
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 try:
@@ -42,7 +48,7 @@ try:
         search_music,
         url_v1,
     )
-    from music_downloader import DownloadException, MusicDownloader
+    from music_downloader import DownloadException, DownloadResult, MusicDownloader
     from session_manager import COOKIE_NAME, SESSION_TTL_SECONDS, SessionManager
     from storage_manager import StorageManager
 except ImportError as e:
@@ -204,6 +210,8 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 RATE_MINUTE = f"{config.rate_per_minute}/minute"
 RATE_HOUR = f"{config.rate_per_hour}/hour"
+# 批量下载单批曲目上限（与上游歌曲详情 100 个/批的口径一致，防止超长请求占用工作线程）
+BATCH_MAX_TRACKS = 100
 
 # CORS（与迁移前行为一致：全开放）
 app.add_middleware(
@@ -578,8 +586,6 @@ def download_music_api(request: Request, data: dict[str, Any] = Depends(get_requ
             api_service.logger.error(f"下载失败: {download_result.error_message}")
             return APIResponse.error(f"下载失败: {download_result.error_message}", 500)
 
-        from urllib.parse import quote
-
         file_path = Path(download_result.file_path)
         info = download_result.music_info
 
@@ -635,6 +641,121 @@ def download_music_api(request: Request, data: dict[str, Any] = Depends(get_requ
     except Exception as e:
         api_service.logger.error(f"下载音乐异常: {e}\n{traceback.format_exc()}")
         return APIResponse.error(f"下载异常: {str(e)}", 500)
+
+
+@app.post('/batch_download')
+@limiter.limit(RATE_MINUTE)
+@limiter.limit(RATE_HOUR)
+def batch_download_api(request: Request, data: dict[str, Any] = Depends(get_request_data)):
+    """批量下载API：按歌曲列表在服务端逐首下载并打包 zip 下发
+
+    - tracks 由前端传入已解析的歌单/专辑曲目（id/name/artists），后端不重复解析上游；
+    - 逐首复用 /download 同一下载链路（缓存命中零上游调用），单首失败不中断批次；
+    - 打包用标准库 zipfile（ZIP_STORED：音频本身已压缩，存储式打包最快且不额外耗 CPU）。
+    """
+    try:
+        raw_tracks = data.get('tracks')
+        quality = data.get('quality', 'lossless')
+        batch_name = str(data.get('name') or '').strip() or '批量下载'
+
+        # 参数验证
+        if not isinstance(raw_tracks, list) or not raw_tracks:
+            return APIResponse.error("参数 'tracks' 不能为空（需为歌曲对象数组）", 400)
+        if len(raw_tracks) > BATCH_MAX_TRACKS:
+            return APIResponse.error(f"单批最多下载 {BATCH_MAX_TRACKS} 首，当前 {len(raw_tracks)} 首", 400)
+
+        valid_qualities = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'jyeffect', 'jymaster', 'dolby']
+        if quality not in valid_qualities:
+            return APIResponse.error(f"无效的音质参数，支持: {', '.join(valid_qualities)}")
+
+        tracks: list[dict[str, str]] = []
+        for item in raw_tracks:
+            if not isinstance(item, dict):
+                return APIResponse.error("tracks 每项须为歌曲对象（含 id/name/artists）", 400)
+            song_id = str(item.get('id') or '').strip()
+            try:
+                int(song_id)
+            except ValueError:
+                return APIResponse.error(f"歌曲 ID 不合法: {song_id or '(空)'}", 400)
+            tracks.append({
+                'id': song_id,
+                'name': str(item.get('name') or '').strip(),
+                'artists': str(item.get('artists') or '').strip(),
+            })
+
+        # 请求级用户凭据：语义与 /download 完全一致（仅内存使用，严禁落盘/日志/DB）
+        user_cookie = (data.get('user_cookie') or '').strip()
+        request_cookies = parse_cookie_string(user_cookie) if user_cookie else None
+
+        # 逐首下载（并发 3，与 max_concurrent 设计一致；命中缓存零上游调用）
+        def _download_one(track: dict[str, str]) -> DownloadResult | None:
+            try:
+                return api_service.downloader.download_music_file(
+                    track['id'], quality, cookies=request_cookies
+                )
+            except DownloadException as e:
+                api_service.logger.warning(f"批量下载单曲失败 (id={track['id']}): {e}")
+                return None
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results = list(pool.map(_download_one, tracks))
+
+        packed: list[tuple[dict[str, str], DownloadResult]] = []
+        # pool.map 保序返回，长度恒等于 tracks；strict=True 兜底暴露意外错位
+        for track, result in zip(tracks, results, strict=True):
+            if result is None or not result.success or not result.file_path:
+                continue
+            file_path = Path(result.file_path)
+            if not file_path.exists():
+                continue
+            # 与 /download 口径一致：命中缓存累加访问量；真实交付计入排行榜
+            if result.cached:
+                api_service.storage.record_access(int(result.music_info.id))
+            api_service.session_manager.record_download(
+                request.state.session_id, int(result.music_info.id), quality
+            )
+            packed.append((track, result))
+
+        total, success = len(tracks), len(packed)
+        api_service.logger.info(f"批量下载完成: 成功 {success}/{total} (quality={quality})")
+        if not packed:
+            return APIResponse.error("全部歌曲下载失败（可能版权限制或 Cookie 缺失）", 404)
+
+        # 打包 zip：临时文件落盘（避免大包占内存），响应完成后后台清理
+        fd, tmp_name = tempfile.mkstemp(suffix='.zip', prefix='batch_')
+        os.close(fd)
+        zip_path = Path(tmp_name)
+        try:
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zf:
+                for idx, (track, result) in enumerate(packed, 1):
+                    # 空歌手用原始串判断（_sanitize_filename 对空串回退 unknown，不能作为判空依据）
+                    base = api_service.downloader._sanitize_filename(track['name'])
+                    if track['artists'].strip():
+                        label = f"{base} - {api_service.downloader._sanitize_filename(track['artists'])}"
+                    else:
+                        label = base
+                    zf.write(result.file_path, f"{idx:02d}. {label}{Path(result.file_path).suffix}")
+        except Exception as e:
+            zip_path.unlink(missing_ok=True)
+            api_service.logger.error(f"批量打包失败: {e}\n{traceback.format_exc()}")
+            return APIResponse.error(f"打包失败: {str(e)}", 500)
+
+        zip_name = f"{api_service.downloader._sanitize_filename(batch_name)}.zip"
+        response = FileResponse(
+            zip_path,
+            media_type='application/zip',
+            filename=zip_name,
+            background=BackgroundTask(zip_path.unlink, missing_ok=True),
+        )
+        response.headers['X-Download-Filename'] = quote(zip_name, safe='')
+        response.headers['X-Batch-Total'] = str(total)
+        response.headers['X-Batch-Success'] = str(success)
+        response.headers['X-Batch-Failed'] = str(total - success)
+        return response
+
+    except Exception as e:
+        api_service.logger.error(f"批量下载异常: {e}\n{traceback.format_exc()}")
+        return APIResponse.error(f"批量下载失败: {str(e)}", 500)
 
 
 @app.get('/rank')
@@ -696,6 +817,7 @@ def api_info():
                 '/playlist': 'GET/POST - 获取歌单详情',
                 '/album': 'GET/POST - 获取专辑详情',
                 '/download': 'GET/POST - 下载音乐',
+                '/batch_download': 'POST - 批量下载（服务端打包 zip）',
                 '/rank': 'GET - 下载排行榜（TOP 20）',
                 '/recommend': 'GET - 智能推荐（5 首，含音质版本与缓存大小）',
                 '/api/info': 'GET - API信息'

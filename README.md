@@ -149,6 +149,7 @@ docker run -d -p 5000:5000 -v ./config.toml:/app/config.toml netease-music-api
 | `/playlist` | GET / POST | 歌单详情，参数 `id`（纯数字 ID） |
 | `/album` | GET / POST | 专辑详情，参数 `id`（纯数字 ID） |
 | `/download` | GET / POST | 下载音乐，参数 `id`、`quality` 音质、`format`（`file`/`json`）、`user_cookie`（可选请求级凭据，仅内存使用，不落盘） |
+| `/batch_download` | POST | 批量下载，参数 `tracks`（`[{id, name, artists}]` 数组，≤ 100）、`quality`、`name`（zip 名）、`user_cookie`；返回 zip 包与 `X-Batch-*` 计数头 |
 | `/rank` | GET | 下载排行榜 TOP 20（近 30 天独立会话数） |
 | `/recommend` | GET | 智能推荐 5 首，参数 `song_id` |
 | `/api/info` | GET | 服务信息（不限速） |

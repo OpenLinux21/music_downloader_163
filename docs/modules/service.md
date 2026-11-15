@@ -61,7 +61,7 @@
 | `log_request_line` 中间件 | 每请求输出一条 GIN 风格请求行（`[SERVER] 时间 \| 状态码 \| 微秒耗时 \| IP \| METHOD 路径`）；不记录请求体 |
 | `CORSMiddleware` | `allow_origins=["*"]`、methods `GET,POST,OPTIONS`、headers `Content-Type,Authorization`、Max-Age 3600（跨域请求时由中间件追加允许头） |
 | `get_request_data` 依赖 | 统一取参：GET 取 query；POST 合并表单与 JSON（JSON 同名键覆盖表单）；`async def` 依赖先行执行，路由本体为同步 `def`（FastAPI 自动入线程池，与同步上游调用/sqlite 短连接兼容） |
-| `limiter`（slowapi） | `key_func=get_remote_address`（来源 IP），阈值 `RATE_MINUTE`/`RATE_HOUR` 读自配置；以装饰器应用于 `/search` `/song` `/playlist` `/album` `/download` 五个业务路由；`/health`、`/api/info`、`/` 不限速（监控可用性优先，见 `docs/api.md`） |
+| `limiter`（slowapi） | `key_func=get_remote_address`（来源 IP），阈值 `RATE_MINUTE`/`RATE_HOUR` 读自配置；以装饰器应用于 `/search` `/song` `/playlist` `/album` `/download` `/batch_download` 六个业务路由；`/health`、`/api/info`、`/` 不限速（监控可用性优先，见 `docs/api.md`） |
 | 异常处理器 | `RateLimitExceeded` → 429 统一结构（「请求过于频繁」）；`StarletteHTTPException` 404 → 「请求的资源不存在」；未处理异常 → 500 「服务器内部错误」（记录 `SERVER` 日志含堆栈） |
 
 ## 6. 路由清单与实现要点
@@ -75,6 +75,7 @@
 | `GET\|POST /playlist` | `get_playlist` | 是 | 包装为 `data={status:'success', playlist:结果}`；**id 不做链接解析** |
 | `GET\|POST /album` | `get_album` | 是 | 包装为 `data={status:200, album:结果}`；**id 不做链接解析** |
 | `GET\|POST /download` | `download_music_api` | 是 | 见下文 6.2 |
+| `POST /batch_download` | `batch_download_api` | 是 | 批量下载（见下文 6.4） |
 | `GET /rank` | `download_rank` | 是 | 下载排行榜：窗口内独立会话数 TOP 20，并列按名称；实现见 `docs/database.md` 第 4 节 |
 | `GET /recommend` | `recommend_api` | 是 | 智能推荐（见下文 6.3） |
 | `GET /api/info` | `api_info` | 否 | 服务元信息；`supported_qualities` 硬编码 7 项缺 `dolby`（已知问题 #4） |
@@ -101,6 +102,16 @@
 1. 校验 `song_id` 非空并可解析为数字 ID（`_extract_music_id` 支持链接/短链）；
 2. 委托 `StorageManager.recommend_for(song_id, limit=5)`（打分/兜底算法见 `docs/api.md` 第 4.9 节）；
 3. 返回 `{song_id, size, recommendations[]}`，每项含 `qualities`（实际缓存音质版本 + 文件大小，`cached=true`）。
+
+### 6.4 `/batch_download` 实现（2026-11-16 新增）
+
+1. 仅支持 POST；校验 `tracks`（非空对象数组、单批 ≤ `BATCH_MAX_TRACKS=100`、每项 `id` 可转 int）、`quality` 白名单；`name` 为 zip 文件名（默认「批量下载」，经 `_sanitize_filename` 清洗）；
+2. 读取可选 `user_cookie`，语义与 `/download` 一致（内存解析，请求结束丢弃）；
+3. 逐首下载：`ThreadPoolExecutor(3)` 并发调用 `downloader.download_music_file`（缓存命中零上游调用；单首 `DownloadException` 仅告警计数，不中断批次）；
+4. 成功项逐个累加访问量（仅缓存命中项，与 `/download` 口径一致）并经 `session_manager.record_download` 计入排行榜；
+5. 打包：标准库 `zipfile` `ZIP_STORED` 写入 `tempfile.mkstemp` 临时 zip，条目名 `01. 歌名 - 歌手.实际扩展名`（序号前缀去重；空歌手省略歌手段——判空用原始串，因 `_sanitize_filename('')` 回退 `unknown`）；
+6. 响应 `FileResponse` zip 流，附 `X-Download-Filename`（`quote` 编码）与 `X-Batch-Total/Success/Failed` 计数头；临时 zip 由 `BackgroundTask`（`unlink(missing_ok=True)`）在响应完成后清理；
+7. 全部失败返回 404；部分失败仍 200，以计数头标注。
 
 ## 7. 启动流程（`start.py`，统一启动入口）
 
