@@ -65,7 +65,7 @@
 
 ### 4.1 `GET /` — Web 首页
 
-返回 `templates/index.html` 渲染结果（HTML 页面，非 JSON）。
+返回 React 前端页面 `frontend/dist/index.html`（HTML，非 JSON）；dist 未构建时返回 503 统一结构（提示执行 `npm run build`）。
 
 ### 4.2 `GET /health` — 健康检查
 

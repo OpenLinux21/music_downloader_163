@@ -21,6 +21,7 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -208,6 +209,11 @@ app.add_middleware(
     max_age=3600,
 )
 
+# React 前端构建产物（frontend/dist，部署时经 npm run build 生成）
+FRONTEND_DIST = Path("frontend") / "dist"
+if (FRONTEND_DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
 
 @app.middleware("http")
 async def session_middleware(request: Request, call_next):
@@ -286,8 +292,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/")
 def index():
-    """首页（过渡期托管现有单文件页面，第十一步由 React 构建产物替换）"""
-    return FileResponse(Path("templates") / "index.html")
+    """首页（React 构建产物 frontend/dist/index.html，由 npm run build 生成）"""
+    index_file = FRONTEND_DIST / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file)
+    return APIResponse.error(
+        "前端尚未构建：请在 frontend/ 目录执行 npm install && npm run build 后重启服务", 503
+    )
 
 
 @app.get('/health')

@@ -10,7 +10,7 @@
 | Python | 3.12（推荐，与 Docker 镜像一致；代码未使用 3.12 专属语法，理论兼容 3.10+，但未验证） | `.venv`（3.12.16）、`Dockerfile` |
 | ffmpeg | 可选。缺失时下载功能仍可用，但元数据与封面写入被跳过（运行中安装亦可被懒加载识别） | `music_downloader.py` |
 | 网易云 Cookie | `config.toml` 的 `server.default_cookie` 需填入账号 Cookie；缺失时基础解析可用，VIP 音质大概率不可用 | `config_loader.get_default_cookie()`、`music_api.load_cookies()` |
-| 网络 | 需能访问 `interface3.music.163.com`、`music.163.com`、`p3.music.126.net`；前端页面依赖 `mirrors.sustech.edu.cn` CDN | `music_api.APIConstants`、`templates/index.html` |
+| 网络 | 需能访问 `interface3.music.163.com`、`music.163.com`、`p3.music.126.net`；前端资源经 npm 构建本地打包（无 CDN 依赖）；需 Node 22 构建一次前端 | `frontend/`、`Dockerfile` 多阶段构建 |
 
 ## 2. 本地运行
 
@@ -27,7 +27,13 @@ cp config.example.toml config.toml
 #    支持 "k1=v1; k2=v2" 单行格式或每行一对的格式。
 #    绑定地址默认 127.0.0.1（仅本机访问）；容器或局域网部署需改为 0.0.0.0。
 
-# 3. 启动服务（统一入口，启动前自动执行四项自检：依赖/配置文件/配置项/端口）
+# 3. 构建前端（React + Vite；产物 frontend/dist 由服务托管）
+cd frontend
+npm install
+npm run build
+cd ..
+
+# 4. 启动服务（统一入口，启动前自动执行四项自检：依赖/配置文件/配置项/端口）
 python start.py
 # 或不激活 venv：.venv/bin/python start.py
 
@@ -126,5 +132,5 @@ curl -s http://localhost:5000/health
 
 1. `requirements.txt` 固定了 `requests==2.28.2`、`urllib3==1.26.15`、`cryptography==40.0.2` 等较旧版本，升级依赖属于变更任务，须评估兼容性并同步文档。
 2. Alpine 镜像编译依赖（如 cryptography 的 Rust 工具链）由固定版本保证可用性，更换基础镜像或升级版本前必须重新验证构建。
-3. 前端静态资源（jQuery/Bootstrap/APlayer）加载自 `mirrors.sustech.edu.cn` CDN，内网或离线环境需自行处理资源可达性。
+3. 前端资源由 `frontend/dist` 静态托管（npm 构建本地打包），无 CDN 外链；本地/容器部署需先完成前端构建（本地 `npm run build`，Docker 多阶段自动构建）。
 4. 服务由 uvicorn 托管 FastAPI（ASGI 单进程，`access_log` 关闭）；个人使用场景足够，如需公网高并发建议在服务前增加反向代理（如 nginx）并升级限速存储。
