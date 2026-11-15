@@ -88,9 +88,12 @@ _extract_music_id → music_id
    │
    ▼
 【缓存查询】storage.get_cached_file(song_id, quality)
-   ├─ 命中（DB 记录 + 文件存在）→ 复用文件，响应组装读 root.db（song_with_file），
-   │   路由层 record_access(song_id) 累加访问量 → cached=true
-   │   （不发起任何上游调用）
+   ├─ 命中且哈希校验通过（verify_hash 重算 SHA-256 比对 sha256sum.db）
+   │   → 复用文件，响应组装读 root.db（song_with_file），
+   │     路由层 record_access(song_id) 累加访问量 → cached=true
+   │     （不发起任何上游调用）
+   ├─ 命中但校验不通过（不一致/无记录）→ invalidate_file 删除该音质主文件与副本
+   │   及 files 行、哈希记录 → 走下方未命中路径重新下载并重新登记哈希
    └─ 未命中 ↓
    │
    ▼
@@ -105,11 +108,11 @@ _extract_music_id → music_id
    │
    ▼
 【后处理 _post_register】（顺序保证 DB 大小与落盘一致）
-   ├─ 封面下载一次 → storage/<song_id>/cover.jpg（同时供 ffmpeg 嵌入）
-   ├─ 歌词 → storage/<song_id>/lyric.lrc
+   ├─ 封面下载一次 → storage/<song_id>/cover.jpg（同时供 ffmpeg 嵌入）+ 哈希登记
+   ├─ 歌词 → storage/<song_id>/lyric.lrc + 哈希登记
    ├─ ffmpeg 写元数据+封面（失败不阻断）
-   ├─ register_song / register_file（root.db 登记）
-   └─ 归属专辑 → copy2 副本到 storage/albums/<album_id>/<song_id>/ 并登记（is_copy=1）
+   ├─ register_song / register_file（root.db 登记）+ register_hash（sha256sum.db）
+   └─ 归属专辑 → copy2 副本到 storage/albums/<album_id>/<song_id>/ 并登记（is_copy=1）+ 哈希登记
    │
    ▼
 file → send_file 文件流 + X-Download-Message / X-Download-Filename（实际文件名，URL 编码）
@@ -177,6 +180,7 @@ finally：删除封面临时文件与残留 .tagging 文件
 | `config.toml` | 人工 / `qr_login.py` / 服务启动读取 | 部署时从模板复制并填写 | Git 不跟踪（.gitignore、.dockerignore 均已排除） |
 | `cookie.backup.*.txt` | `qr_login.py` | 覆盖/清除 Cookie 前 | 无自动清理，Git 不跟踪 |
 | `storage/root.db` | `storage_manager.py` | 服务启动建库；下载/命中/清理时读写 | Git 不跟踪 |
+| `storage/sha256sum.db` | `storage_manager.py` | 文件入缓存时登记哈希；命中前重算校验 | Git 不跟踪 |
 | `storage/<song_id>/…` | `MusicDownloader`（经 `_post_register`） | 首次下载落盘并登记；命中复用不写盘 | 3 个月到期删除 / 超限按访问量淘汰（见 `docs/database.md`） |
 | `storage/albums/<album_id>/<song_id>/…` | `MusicDownloader` | 下载完成后 copy2 副本 | 随歌曲一并清理 |
 | `storage/<song_id>/*.part` | 下载临时文件 | 下载期间 | 完成后原子改名 |

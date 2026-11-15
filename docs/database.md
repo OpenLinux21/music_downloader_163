@@ -9,6 +9,7 @@
 ```text
 storage/                             # 运行时生成，整体被 .gitignore 排除
 ├── root.db                          # sqlite3 元数据库
+├── sha256sum.db                     # sqlite3 哈希追踪库
 ├── <song_id>/                       # 每首歌曲一个文件夹（song_id 为网易云歌曲 ID）
 │   ├── <歌曲名>.<ext>                # 各音质音频；扩展名被其他音质占用时为 <歌曲名>.<quality>.<ext>
 │   ├── cover.jpg                    # 专辑封面（下载时落盘，供嵌入与展示复用）
@@ -58,9 +59,37 @@ storage/                             # 运行时生成，整体被 .gitignore �
 ### 2.3 连接与并发模型
 
 - 每次操作独立短连接（`sqlite3.connect(timeout=10)`），规避 Flask 多线程下的跨线程连接限制；写并发由 sqlite 内置锁兜底，适配个人使用规模。
-- 登记顺序：`register_song` → 封面/歌词落盘 → ffmpeg 元数据写入 → `register_file`（保证 size 与最终落盘一致）→ 专辑副本登记。
+- 登记顺序：`register_song` → 封面/歌词落盘（含哈希登记）→ ffmpeg 元数据写入 → `register_file` + `register_hash`（保证 size 与最终落盘一致）→ 专辑副本登记（含哈希）。
 
-## 3. 缓存语义
+## 3. sha256sum.db（哈希追踪库，2026-11-15 引入）
+
+### 3.1 file_hashes 表
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `path` | TEXT PK | 相对 `storage/` 的 POSIX 路径（与 files.path 同口径） |
+| `sha256` | TEXT | 文件内容 SHA-256（`compute_sha256` 流式 1MB 分块计算） |
+| `size` | INTEGER | 登记时文件字节数 |
+| `song_id` | INTEGER NULL | 所属歌曲（音频/封面/歌词均有；清理联动删除键） |
+| `quality` | TEXT NULL | 音质（仅音频文件有；封面/歌词为 NULL） |
+| `registered_at` | REAL | 登记时间 |
+
+覆盖范围：**storage 内全部文件**——音频主文件、专辑副本、cover.jpg、lyric.lrc。
+
+### 3.2 完整性校验链路
+
+```text
+缓存命中（get_cached_file）→ verify_hash（重算 SHA-256 与记录比对）
+   ├─ 一致 → 复用文件提供给用户（record_access 累加访问量）
+   └─ 不一致（含无记录 / 文件缺失）→ 判定损坏：
+        invalidate_file：删除该音质主文件 + 专辑副本 + files 行 + 哈希记录
+        → 重新下载 → 重新完成元数据写入 → 重新登记哈希 → 再提供给用户
+```
+
+- 校验点在下载器缓存命中分支（`MusicDownloader`），路由层无感知；校验为每次命中实时重算（约 10MB 文件 < 50ms，个人规模可接受）。
+- 升级自愈：本库引入前已存在的缓存文件无哈希记录，首次访问会走一次「失效重下」完成登记（`invalidate_file` 保留 songs 行与访问量）。
+
+## 4. 缓存语义
 
 - 缓存键：`(song_id, quality)`（主存储，`is_copy = 0`）；命中条件为 DB 有记录 **且** 文件真实存在。
 - 命中行为：直接复用文件，调用方执行 `record_access(song_id)` 累加 `visit_count`；响应组装读取 root.db（`song_with_file`），不再发起上游请求（修复原 `/download` 每次重复调用上游的问题）。
@@ -75,8 +104,18 @@ storage/                             # 运行时生成，整体被 .gitignore �
 
 执行时机：服务启动（导入 `main` 时创建 `StorageManager` 后）立即执行一次；守护线程 `storage-cleanup` 每 3600 秒循环执行；清理结果经 `STORAGE` 前缀输出（后续可接入统一日志器）。清理失败仅告警，不影响服务。
 
-## 5. 变更记录
+## 5. 清理策略（`StorageManager.cleanup`）
+
+| 策略 | 触发条件 | 动作 |
+| --- | --- | --- |
+| 到期删除 | `songs.created_at` 距今超过保留期（默认 90 天） | 按歌曲粒度删除：`storage/<song_id>/`、`albums/*/<song_id>/` 与两表记录（含 `file_hashes` 哈希记录） |
+| 超限淘汰 | 全部登记文件总大小（`SUM(files.size)`，含副本）超过 `config.toml` 的 `cache.max_size_mb` | 按 `visit_count` 升序（并列按 song_id 升序）整歌淘汰，循环直至回到上限内（同样联动删除哈希记录） |
+
+执行时机：服务启动（导入 `main` 时创建 `StorageManager` 后）立即执行一次；守护线程 `storage-cleanup` 每 3600 秒循环执行；清理结果经 `STORAGE` 前缀输出（后续可接入统一日志器）。清理失败仅告警，不影响服务。
+
+## 6. 变更记录
 
 | 日期 | 变更 | 执行者 |
 | --- | --- | --- |
 | 2026-11-15 | 初版创建：root.db（songs/files 表）、存储目录布局、缓存键与命中语义、双策略清理 | AI Agent（feat/storage-cache 分支） |
+| 2026-11-15 | 新增 sha256sum.db（file_hashes 表）：全量文件哈希登记、命中前实时校验、损坏失效重下链路、清理联动删除哈希 | AI Agent（feat/sha256-tracking 分支） |
