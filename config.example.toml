@@ -1,0 +1,28 @@
+# 网易云音乐服务配置模板
+# 使用方法：复制本文件为 config.toml 后按需修改。
+# 安全约定：config.toml 可能包含服务器 Cookie 等凭据，已被 .gitignore 排除，禁止提交到 Git。
+
+[server]
+# 服务绑定 IP（默认 127.0.0.1；容器或局域网部署需改为 0.0.0.0）
+host = "127.0.0.1"
+# 服务监听端口（默认 5000）
+port = 5000
+# 服务器默认网易云音乐 Cookie（"k1=v1; k2=v2" 单行格式，或每行一对）
+# 留空时基础解析可用，VIP 音质大概率不可用
+default_cookie = ""
+
+[cache]
+# 本地缓存大小上限，单位 MB（默认 8192 即 8 GB）
+max_size_mb = 8192
+
+[download]
+# 是否允许多线程下载
+multi_thread = false
+# 下载限速，单位 KB/s；0 表示不限速
+speed_limit_kb = 0
+
+[api]
+# API 接口限速：每 IP 每分钟允许的请求次数（默认 10）
+rate_limit_per_minute = 10
+# API 接口限速：每 IP 每小时允许的请求次数（默认 25）
+rate_limit_per_hour = 25

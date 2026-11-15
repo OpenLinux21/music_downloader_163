@@ -10,7 +10,6 @@
 """
 
 import json
-import os
 import urllib.parse
 import time
 from random import randrange
@@ -21,6 +20,8 @@ from enum import Enum
 import requests
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+from config_loader import get_default_cookie
 
 
 class QualityLevel(Enum):
@@ -664,23 +665,13 @@ def qr_login() -> Optional[str]:
 
 # ============ Cookie 工具 ============
 
-DEFAULT_COOKIE_FILE = "cookie.txt"
-
-
-def load_cookies(path: str = DEFAULT_COOKIE_FILE) -> Dict[str, str]:
-    """从 cookie.txt 直接读取并解析为 dict
+def load_cookies() -> Dict[str, str]:
+    """读取 config.toml 中服务器默认 Cookie（server.default_cookie）并解析为 dict
 
     支持标准 ``NMTID=xxx; _ntes_nnid=xxx; ...`` 格式。
-    文件不存在或解析失败返回空 dict（不抛异常，调用方决定如何处理）。
+    未配置 Cookie 或配置文件缺失时返回空 dict（不抛异常，调用方决定如何处理）。
     """
-    if not os.path.isfile(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-    except OSError:
-        return {}
-    return parse_cookie_string(content)
+    return parse_cookie_string(get_default_cookie())
 
 
 def parse_cookie_string(cookie_string: str) -> Dict[str, str]:

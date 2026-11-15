@@ -16,6 +16,7 @@
 | Docker 化 | PR#15 `d5348c3`/`60e3270` 新增 docker/.gitignore | 引入 Dockerfile、docker-compose、entrypoint 与 .env |
 | Docker 修复 | PR#133 `fcbb409` align Docker Python version、`0e3af03`、`3408787` | 将镜像 Python 版本与锁定依赖对齐（修复构建兼容性）；移除 Docker 冒烟 CI；**镜像定为 python:3.12-alpine3.23** |
 | 维护 | `18b28be` chore: ignore music_api.log | 将运行日志纳入 .gitignore |
+| 配置系统 | `feat/config-system` 分支（2026-11-15） | 引入 `config.toml` 配置体系与 `config_loader.py`；Cookie 自 `cookie.txt` 迁入配置并废弃原文件 |
 
 ## 2. 重要设计决策及动机（依据代码现状推断与提交记录）
 
@@ -57,6 +58,13 @@
 
 决策：PR#133 将镜像与依赖锁定对齐（`python:3.12-alpine3.23`），随后移除 Docker 冒烟 CI（`3408787`）。
 动机：修复依赖与镜像 Python 版本不匹配的构建问题；CI 移除原因提交信息未说明（不深究）。
+
+### 2.8 配置体系引入与 Cookie 迁移（2026-11-15，feat/config-system）
+
+决策：以 `config.toml` 作为唯一配置来源（标准库 `tomllib` 解析，不引入第三方 TOML 依赖），`config_loader.py` 提供默认值合并与读写；服务器默认 Cookie 从 `cookie.txt` 迁入 `server.default_cookie`，`cookie.txt` 从 Git 移除并废弃（.gitignore/.dockerignore 双重排除），`qr_login.py` 的 Cookie 存取改经 `config_loader`。
+动机：集中硬编码的服务配置（绑定地址、端口、缓存上限、下载开关、限速），为后续启动检查、限速、缓存清理等功能提供配置基础；同时消除凭据文件被 Git 跟踪的安全隐患（AGENTS.md 凭据红线）。
+取舍：`tomllib` 只读，Cookie 写回用「文本替换单行 + 缺键插入/缺节追加」实现，保留文件注释与结构（完整 TOML 序列化需第三方库，收益不匹配）；配置读取不做内存缓存，保持与旧 `cookie.txt` 相同的「修改即时生效」语义。模板 `config.example.toml` 提交、真实 `config.toml` 不提交。
+迁移效果：本地默认监听地址由 `0.0.0.0` 变为 `127.0.0.1`（容器部署需在挂载的 config.toml 中设 `host = "0.0.0.0"`，见 `docs/deployment.md` §3.4）。
 
 ## 3. 历史遗留与不一致（详见 docs/knowledge-base.md）
 

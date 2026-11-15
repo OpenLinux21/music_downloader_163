@@ -13,8 +13,9 @@
 | 默认分支 | `main`（历史开发分支）；`develop` 为日常开发基准分支（2026-11-15 由用户确认后自 main 创建） |
 | 运行版本 | Python 3.12（本机 `.venv` 实测 3.12.16；Docker `python:3.12-alpine3.23`） |
 | 启动方式 | `python main.py`（无命令行参数解析） |
+| 配置文件 | `config.toml`（唯一配置来源，Git 不跟踪）+ 提交模板 `config.example.toml`；读取模块 `config_loader.py` |
 | 数据库 | 无（仅文件存储，见 `docs/architecture.md` 第 6 节） |
-| 测试框架 | 无；标准验证方式见 `docs/doc-maintenance.md` 第 3 节 |
+| 测试框架 | 无；`tests/` 下有断言式自检脚本（直接运行）；标准验证方式见 `docs/doc-maintenance.md` 第 3 节 |
 
 ## 2. 术语表
 
@@ -32,7 +33,7 @@
 以下事实均通过阅读当前代码与本地运行验证得出，修改对应代码时必须复查：
 
 1. **启动副作用**：导入 `main.py` 即实例化 `MusicAPIService`，会创建 `downloads/` 目录并初始化双通道日志（控制台 + `music_api.log` 文件）。
-2. **Cookie 即时读取**：每个业务请求处理时都调用 `load_cookies()` 重新读取 `cookie.txt`，无内存缓存；文件缺失或解析失败返回空字典且不抛异常。
+2. **Cookie 即时读取**：每个业务请求处理时都调用 `load_cookies()`，后者经 `config_loader.get_default_cookie()` 实时读取 `config.toml` 的 `server.default_cookie`（原 `cookie.txt` 已于 2026-11-15 废弃并从 Git 移除），无内存缓存；未配置或配置文件缺失返回空字典且不抛异常；配置文件存在但 TOML 解析失败时异常上抛（导入 `main.py` 阶段即失败）。
 3. **Cookie 状态判定**：`/health` 的 `cookie_status` 仅判断 Cookie 字典是否非空（`valid`/`invalid`），不校验登录态是否真实有效。
 4. **音质校验表**：`/song` 与 `/download` 的合法音质列表为 8 项（含 `dolby`），硬编码在 `main.py` 的两个路由函数内；`/api/info` 返回的 `supported_qualities` 只有 7 项（缺 `dolby`），属文档性字段不一致。
 5. **eapi 加密算法**（`music_api.CryptoUtils.encrypt_params`）：
@@ -55,6 +56,8 @@
 18. **前端接口调用**（`templates/index.html`）：搜索 POST `/Search`、解析 POST `/Song_V1`（`type=json`）、歌单 GET `/Playlist`、专辑 GET `/Album`、下载 XHR POST `/Download`（blob 响应，读取 `X-Download-Message`/`X-Download-Filename` 响应头）。
 19. **CORS 全开放**：`after_request` 对所有响应添加 `Access-Control-Allow-Origin: *` 等 4 个 CORS 头。
 20. **容器时区**：Dockerfile 设置 `TZ=Asia/Shanghai`；pip 使用阿里云镜像源。
+21. **配置加载行为**（`config_loader.py`）：`load_config()` 严格读取（文件缺失抛 `FileNotFoundError`、非法 TOML 抛 `tomllib.TOMLDecodeError`）；`get_config()` 在文件缺失时回落内置默认值并向 stderr 告警，解析错误不吞直接抛出；所有读取无内存缓存，修改配置即时生效。内置默认值：host `127.0.0.1`、port `5000`、`max_size_mb` 8192（MB）、`multi_thread` false、`speed_limit_kb` 0（KB/s，0 不限速）、限速 10 次/分钟 + 25 次/小时。`main.py` 在模块导入时把 `server.host`/`server.port` 接线到 `APIConfig`。
+22. **Cookie 写回与备份**（`config_loader.save_default_cookie` / `qr_login.py`）：写回采用文本替换只改动 `default_cookie` 一行（值经 `json.dumps` 编码，转义规则与 TOML 基本字符串兼容），缺键时插入 `[server]` 节头之后、缺节时文件末尾追加、文件缺失时自动创建最小配置；`qr_login.py` 覆盖/清除前把旧 Cookie 备份为项目根 `cookie.backup.<suffix>.<时间戳>.txt`（已 gitignore），`logout` 通过写空串清除而非删除文件。
 
 ## 4. 外部接口事实（上游依赖）
 
@@ -103,3 +106,4 @@
 | 日期 | 变更 | 执行者 |
 | --- | --- | --- |
 | 2026-11-15 | 初版创建：完成全项目勘察，登记 10 项已知问题、5 项待确认事项 | AI Agent（文档体系建设任务） |
+| 2026-11-15 | 配置系统落地（feat/config-system）：新增 `config.toml`/`config.example.toml`/`config_loader.py`；Cookie 自 `cookie.txt` 迁入 `server.default_cookie` 并废弃 `cookie.txt`（`git rm` + .gitignore/.dockerignore 排除）；`main.py` 绑定地址/端口接入配置；`qr_login.py` Cookie 存取改走 config.toml；实证事实 2 改写，新增事实 21/22；新增自检脚本 `tests/test_config_system.py` | AI Agent |

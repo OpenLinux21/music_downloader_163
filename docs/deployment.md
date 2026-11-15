@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | Python | 3.12（推荐，与 Docker 镜像一致；代码未使用 3.12 专属语法，理论兼容 3.10+，但未验证） | `.venv`（3.12.16）、`Dockerfile` |
 | ffmpeg | 可选。缺失时下载功能仍可用，但元数据与封面写入被跳过（运行中安装亦可被懒加载识别） | `music_downloader.py` |
-| 网易云 Cookie | `cookie.txt` 需填入账号 Cookie；缺失时基础解析可用，VIP 音质大概率不可用 | `music_api.load_cookies()` |
+| 网易云 Cookie | `config.toml` 的 `server.default_cookie` 需填入账号 Cookie；缺失时基础解析可用，VIP 音质大概率不可用 | `config_loader.get_default_cookie()`、`music_api.load_cookies()` |
 | 网络 | 需能访问 `interface3.music.163.com`、`music.163.com`、`p3.music.126.net`；前端页面依赖 `mirrors.sustech.edu.cn` CDN | `music_api.APIConstants`、`templates/index.html` |
 
 ## 2. 本地运行
@@ -20,9 +20,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. 准备 Cookie（可选，高音质必需）
-#    在项目根目录创建 cookie.txt，内容为浏览器登录网易云后的 Cookie，
+# 2. 准备配置与 Cookie
+#    复制模板生成本地配置文件（config.toml 含凭据，已被 .gitignore 排除，禁止提交）：
+cp config.example.toml config.toml
+#    然后编辑 config.toml：server.default_cookie 填入浏览器登录网易云后的 Cookie，
 #    支持 "k1=v1; k2=v2" 单行格式或每行一对的格式。
+#    绑定地址默认 127.0.0.1（仅本机访问）；容器或局域网部署需改为 0.0.0.0。
 
 # 3. 启动服务
 python main.py
@@ -32,21 +35,21 @@ python main.py
 curl http://localhost:5000/health
 ```
 
-启动后监听 `0.0.0.0:5000`，浏览器访问 `http://localhost:5000` 使用 Web 界面。
+启动后监听 `config.toml` 的 `server.host:server.port`（默认 `127.0.0.1:5000`，仅本机可访问），浏览器访问 `http://127.0.0.1:5000` 使用 Web 界面。
 
 启动副作用（属正常行为）：自动创建 `downloads/` 目录；生成并追加写 `music_api.log`。
 
 命令行工具（可选）：
 
 ```bash
-python qr_login.py login    # 扫码登录并写入 cookie.txt（注意：当前实现存在接口不匹配，实际不可用，见 docs/knowledge-base.md 已知问题 #1）
+python qr_login.py login    # 扫码登录并写入 config.toml（注意：当前实现存在接口不匹配，实际不可用，见 docs/knowledge-base.md 已知问题 #1）
 python qr_login.py status   # 查看 Cookie 状态
 python qr_login.py logout   # 备份并清除 Cookie
 python music_api.py         # 打印模块功能说明
 python music_downloader.py <music_id> [quality] [--download]  # 命令行查询/下载单曲
 ```
 
-获取可用 Cookie 的替代路径：在能正常登录的终端中运行 `python -c "from music_api import qr_login; print(qr_login())"`，按提示扫码后将输出写入 `cookie.txt`。
+获取可用 Cookie 的替代路径：在能正常登录的终端中运行 `python -c "from music_api import qr_login; print(qr_login())"`，按提示扫码后将输出粘贴到 `config.toml` 的 `server.default_cookie`（或运行 `python qr_login.py` 交互菜单的保存功能）。
 
 ## 3. Docker 部署
 
@@ -75,11 +78,17 @@ docker build -t netease-music-api .
 docker run -d -p 5000:5000 netease-music-api
 ```
 
-> 注意：纯 `docker run` 方式不会挂载 `cookie.txt`；镜像构建时 `COPY . .` 会把构建上下文中的 `cookie.txt` 打进镜像层，存在凭据进入镜像的风险，生产部署应避免带真实凭据构建。
+> 注意：纯 `docker run` 方式不会挂载配置；`.dockerignore` 已排除 `config.toml`、`cookie.txt` 及其备份文件，凭据不会进入镜像层。容器运行需通过 `-v ./config.toml:/app/config.toml` 挂载配置（见 3.4）。
 
-### 3.4 Cookie 挂载建议（可选做法）
+### 3.4 配置挂载建议
 
-容器内工作目录为 `/app`，服务从 `/app/cookie.txt` 读取 Cookie。如需替换 Cookie，可重建镜像或使用 `-v ./cookie.txt:/app/cookie.txt` 挂载覆盖（当前 `docker-compose.yml` 未配置该挂载）。
+容器内工作目录为 `/app`，服务从 `/app/config.toml` 读取配置与默认 Cookie。替换 Cookie 或调整绑定地址时挂载覆盖：
+
+```bash
+docker run -d -p 5000:5000 -v ./config.toml:/app/config.toml netease-music-api
+```
+
+容器内监听地址需为 `0.0.0.0`（`server.host`）才能被端口映射访问（当前 `docker-compose.yml` 未配置该挂载）。
 
 ## 4. 环境变量与启动参数（重要事实）
 
@@ -116,7 +125,7 @@ URL=http://127.0.0.1:5000
 ```bash
 curl -s http://localhost:5000/health
 # 期望：{"status":200,"success":true,...,"data":{"service":"running",...}}
-# cookie_status=valid 仅表示 cookie.txt 非空，不代表登录态有效
+# cookie_status=valid 仅表示 config.toml 的 server.default_cookie 解析出非空 Cookie，不代表登录态有效
 ```
 
 ## 7. 已知部署注意事项

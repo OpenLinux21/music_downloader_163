@@ -83,7 +83,7 @@ qr_login()          完整流程：create → while 循环 check（间隔 2s）
 
 | 函数 | 行为 |
 | --- | --- |
-| `load_cookies(path="cookie.txt")` | 文件不存在或读取失败返回 `{}`；内容 strip 后交给解析器 |
+| `load_cookies()` | 经 `config_loader.get_default_cookie()` 实时读取 `config.toml` 的 `server.default_cookie`；未配置或文件缺失返回 `{}`（不抛异常）；文件存在但 TOML 解析失败时异常上抛 |
 | `parse_cookie_string(s)` | 自动识别 `;` 或换行分隔；按首个 `=` 切分键值；空键值对跳过；返回字典 |
 
 `parse_cookie_string` 是模块级公开函数，可被其他模块复用做 Cookie 解析。
@@ -96,17 +96,17 @@ qr_login()          完整流程：create → while 循环 check（间隔 2s）
 
 | 分组 | 方法 | 行为 |
 | --- | --- | --- |
-| Cookie 文件操作 | `_read_cookie` / `_write_cookie` / `_backup_cookie(suffix)` / `_clear_cookie` | 读写 `cookie.txt`（UTF-8）；备份命名 `cookie.txt.backup.YYYYmmdd_HHMMSS.txt`；写空串被拒绝 |
-| 状态判定 | `_is_cookie_valid` / `_get_cookie_info` | 含任一重要键即有效；info 含文件路径、Cookie 数量、缺失键、mtime |
+| Cookie 存取 | `_read_cookie` / `_write_cookie` / `_backup_cookie(suffix)` / `_clear_cookie` | 经 `config_loader` 读写 `config.toml` 的 `server.default_cookie`；覆盖/清除前把旧 Cookie 备份到 `cookie.backup.<suffix>.<时间戳>.txt`；写空串被拒绝（登出经 `save_default_cookie("")` 实现） |
+| 状态判定 | `_is_cookie_valid` / `_get_cookie_info` | 含任一重要键即有效；info 含配置文件路径、Cookie 数量、缺失键 |
 | 业务方法 | `check_existing_login` / `interactive_login` / `save_cookie` / `show_login_info` / `logout` | `save_cookie` 先备份再写入再校验；`logout` 备份后缀为 `logout` 后删除文件 |
 
 CLI 命令：`login` / `status`(或 `info`) / `logout` / `help`；无参数进入交互菜单（登录/状态/登出/退出）。
 
-**当前可用性**：`status`、`logout`、`show_login_info` 正常；`login` 因第 6 节所述接口不匹配不可用。运行本模块前不要求 `cookie.txt` 存在。
+**当前可用性**：`status`、`logout`、`show_login_info` 正常；`login` 因第 6 节所述接口不匹配不可用。运行本模块前不要求 `config.toml` 存在（缺失时 Cookie 视为空）。
 
 ## 9. 修改注意事项
 
 1. 修改加密/序列化细节前必须理解第 3 节约束，改动后需真实账号验证上游可用性。
 2. 新增上游接口时：常量加入 `APIConstants`、封装为 `NeteaseAPI` 方法、提供向后兼容函数（现行模式）、登记 `docs/knowledge-base.md` 第 4 节、按需在 `main.py` 暴露路由。
 3. `QualityLevel` 枚举与 `music_downloader.py` 中重复定义，且业务逻辑未引用（音质校验在 `main.py` 硬编码列表）；调整音质列表时按 `docs/doc-maintenance.md` 全量同步。
-4. 修改 Cookie 解析逻辑时注意 `qr_login.py` 的有效性判定与备份行为依赖 `load_cookies`。
+4. 修改 Cookie 存取逻辑时注意 `qr_login.py` 的有效性判定与备份行为依赖 `load_cookies`/`config_loader`；配置文件路径通过 `QRLoginClient(config_file=...)` 注入，自检脚本以此在临时副本上验证。

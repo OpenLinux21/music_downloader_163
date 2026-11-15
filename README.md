@@ -76,9 +76,11 @@ pip install -r requirements.txt
 ```
 
 #### 3. 配置Cookie
-在 `cookie.txt` 文件中填入黑胶会员账号的Cookie：
+复制 `config.example.toml` 为 `config.toml`，在其中的 `default_cookie` 字段填入黑胶会员账号的Cookie：
 
 > 💡 **获取Cookie方法**：登录网易云音乐网页版 → F12开发者工具 → Network标签页 → 复制任意请求的Cookie值
+
+> ⚠️ `config.toml` 含账号凭据，已被 `.gitignore` 排除，请勿提交到 Git。
 
 
 > 杜比全景声音质需要设备支持，不同的设备可能会返回不同码率的 url cookie 需要传入os=pc保证返回正常码率的 url
@@ -295,7 +297,7 @@ Content-Type: application/json
 ## 注意事项
 
 - 必须使用黑胶会员账号的 Cookie 才能解析高音质资源。
-- Cookie 格式请严格按照 `cookie.txt` 示例填写。
+- Cookie 格式请严格按照 `config.toml` 中 `default_cookie` 的示例填写。
 
 ---
 

@@ -8,10 +8,10 @@
 
 | 项 | 内容 |
 | --- | --- |
-| Base URL | `http://localhost:5000`（默认 `host=0.0.0.0`、`port=5000`，定义于 `main.APIConfig`） |
+| Base URL | `http://localhost:5000`（`host`/`port` 读自 `config.toml` 的 `server.host`/`server.port`，默认 `127.0.0.1:5000`） |
 | 请求方式 | GET / POST；POST 同时接受 JSON 体与表单（JSON 优先） |
 | 响应格式 | JSON（`/download` 默认返回音频文件流，`format=json` 时返回 JSON） |
-| 鉴权 | 无。服务不校验调用方身份；上游鉴权依赖服务端 `cookie.txt` |
+| 鉴权 | 无。服务不校验调用方身份；上游鉴权依赖 `config.toml` 中服务器默认 Cookie |
 | CORS | 全部响应允许任意来源（`Access-Control-Allow-Origin: *`） |
 
 ## 2. 统一响应结构
@@ -80,7 +80,7 @@
 }
 ```
 
-说明：`cookie_status` 仅表示 `cookie.txt` 是否解析出非空 Cookie（`valid`/`invalid`），**不代表登录态真实有效**；`timestamp` 为 Unix 秒级时间戳。
+说明：`cookie_status` 仅表示 `config.toml` 的 `server.default_cookie` 是否解析出非空 Cookie（`valid`/`invalid`），**不代表登录态真实有效**；`timestamp` 为 Unix 秒级时间戳。
 
 ### 4.3 `GET|POST /song`（别名 `/Song_V1`）— 歌曲信息
 
