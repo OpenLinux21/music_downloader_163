@@ -33,6 +33,7 @@ import requests
 
 from music_api import APIException, NeteaseAPI, load_cookies
 from logger import get_logger
+from storage_manager import StorageManager
 
 
 # ============ 类型定义 ============
@@ -65,6 +66,7 @@ class MusicInfo:
     name: str
     artists: str
     album: str
+    album_id: Optional[int]
     pic_url: str
     duration: int
     track_number: int
@@ -84,6 +86,7 @@ class DownloadResult:
     file_size: int = 0
     error_message: str = ""
     music_info: Optional[MusicInfo] = None
+    cached: bool = False  # 是否命中缓存复用
 
 
 class DownloadException(Exception):
@@ -123,26 +126,28 @@ class MusicDownloader:
     """网易云音乐下载器
 
     用法:
-        downloader = MusicDownloader(download_dir="downloads")
+        downloader = MusicDownloader(storage_dir="storage")
         result = downloader.download_music_file(music_id, quality="lossless")
     """
 
     def __init__(
         self,
-        download_dir: str = "downloads",
+        storage_dir: str = "storage",
         max_concurrent: int = 3,
         ffmpeg_path: Optional[str] = None,
+        storage_manager: Optional[StorageManager] = None,
     ):
         """
         Args:
-            download_dir: 下载目录
+            storage_dir: 存储根目录（按歌曲 ID 分类；测试时可指向临时目录）
             max_concurrent: 最大并发下载数
             ffmpeg_path: ffmpeg 可执行文件路径，为 None 时启动时检测一次
+            storage_manager: 外部注入的存储管理器（服务侧传入带配置的实例）；
+                缺省时按 storage_dir 自建（不限总量、默认保留期）
         """
-        self.download_dir = Path(download_dir)
-        self.download_dir.mkdir(exist_ok=True)
-        self.max_concurrent = max_concurrent
         self.logger = get_logger("DOWNLOADER")
+        self.storage = storage_manager or StorageManager(storage_dir)
+        self.max_concurrent = max_concurrent
 
         self.api = NeteaseAPI()
 
@@ -238,6 +243,7 @@ class MusicDownloader:
                 name=song_detail.get("name", "未知歌曲"),
                 artists=artists or "未知艺术家",
                 album=song_detail.get("al", {}).get("name", "未知专辑"),
+                album_id=song_detail.get("al", {}).get("id"),
                 pic_url=song_detail.get("al", {}).get("picUrl", ""),
                 duration=song_detail.get("dt", 0) // 1000,
                 track_number=song_detail.get("no", 0),
@@ -257,14 +263,16 @@ class MusicDownloader:
     # ----------- 文件路径 -----------
 
     def _build_file_path(self, music_info: MusicInfo) -> Path:
-        """根据 MusicInfo 生成下载文件路径"""
-        filename = f"{music_info.artists} - {music_info.name}"
-        safe = self._sanitize_filename(filename)
+        """根据 MusicInfo 确定存储路径：storage/<song_id>/歌曲名[.quality].<ext>"""
         ext = self._determine_file_extension(
             music_info.download_url,
             api_type=music_info.file_type,
         )
-        return self.download_dir / f"{safe}{ext}"
+        path = self.storage.resolve_audio_path(
+            music_info.id, music_info.quality, music_info.name, ext
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
     # ----------- 下载（同步） -----------
 
@@ -273,30 +281,38 @@ class MusicDownloader:
         music_id: int,
         quality: str = "standard",
     ) -> DownloadResult:
-        """同步下载音乐到本地"""
+        """同步下载音乐到本地存储（命中缓存直接复用，不重复下载）"""
         try:
+            music_id = int(music_id)
+
+            # 缓存命中：直接复用文件，访问计数由调用方（路由层）累加
+            cached = self.storage.get_cached_file(music_id, quality)
+            if cached is not None:
+                record = self.storage.song_with_file(music_id, quality)
+                if record is not None:
+                    return DownloadResult(
+                        success=True,
+                        file_path=str(cached),
+                        file_size=cached.stat().st_size,
+                        music_info=self._music_info_from_record(record, quality),
+                        cached=True,
+                    )
+
             music_info = self.get_music_info(music_id, quality)
             file_path = self._build_file_path(music_info)
 
-            # 已存在则直接返回
-            if file_path.exists():
-                return DownloadResult(
-                    success=True,
-                    file_path=str(file_path),
-                    file_size=file_path.stat().st_size,
-                    music_info=music_info,
-                )
-
-            # 流式下载
+            # 流式下载到临时文件，完成后原子改名
+            tmp_path = file_path.with_name(file_path.name + ".part")
             response = requests.get(music_info.download_url, stream=True, timeout=30)
             response.raise_for_status()
-            with open(file_path, "wb") as f:
+            with open(tmp_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
+            tmp_path.replace(file_path)
 
-            # 写入元数据（失败不影响主流程）
-            self._write_metadata_with_ffmpeg(file_path, music_info)
+            # 登记 + 后处理（封面/歌词落盘、元数据写入、专辑副本）
+            self._post_register(music_info, file_path)
 
             return DownloadResult(
                 success=True,
@@ -312,6 +328,74 @@ class MusicDownloader:
         except Exception as e:
             return DownloadResult(success=False, error_message=f"下载过程中发生错误: {e}")
 
+    # ----------- 下载后登记与后处理 -----------
+
+    def _post_register(self, music_info: MusicInfo, file_path: Path) -> None:
+        """下载完成后的统一后处理：封面/歌词落盘、ffmpeg 元数据、登记 DB、专辑副本
+
+        登记放在元数据写入之后，保证 DB 记录的文件大小与最终落盘一致。
+        """
+        storage = self.storage
+        storage.register_song({
+            "song_id": music_info.id,
+            "name": music_info.name,
+            "artists": music_info.artists,
+            "album_id": music_info.album_id,
+            "album_name": music_info.album,
+            "duration": music_info.duration,
+        })
+
+        # 封面下载一次：既落盘 storage/<song_id>/cover.jpg，也供 ffmpeg 嵌入复用
+        cover_local: Optional[Path] = None
+        if music_info.pic_url:
+            try:
+                pic_resp = requests.get(music_info.pic_url, timeout=10)
+                pic_resp.raise_for_status()
+                cover_local = storage.save_cover(music_info.id, pic_resp.content)
+            except Exception as e:
+                self.logger.warning(f"封面下载失败，跳过封面保存: {e}")
+
+        storage.save_lyric(music_info.id, music_info.lyric)
+
+        self._write_metadata_with_ffmpeg(file_path, music_info, cover_local=cover_local)
+
+        storage.register_file(music_info.id, music_info.quality, file_path,
+                              file_path.stat().st_size, is_copy=False)
+
+        # 归属专辑：另存副本到 storage/albums/<album_id>/<song_id>/（含封面歌词）
+        if music_info.album_id:
+            try:
+                album_dir = storage.album_song_dir(music_info.album_id, music_info.id)
+                album_dir.mkdir(parents=True, exist_ok=True)
+                copy_path = album_dir / file_path.name
+                shutil.copy2(file_path, copy_path)
+                storage.register_file(music_info.id, music_info.quality, copy_path,
+                                      copy_path.stat().st_size, is_copy=True)
+                if cover_local and not (album_dir / "cover.jpg").exists():
+                    shutil.copy2(cover_local, album_dir / "cover.jpg")
+                lyric_src = storage.song_dir(music_info.id) / "lyric.lrc"
+                if lyric_src.exists() and not (album_dir / "lyric.lrc").exists():
+                    shutil.copy2(lyric_src, album_dir / "lyric.lrc")
+            except Exception as e:
+                self.logger.warning(f"专辑副本保存失败（不影响主文件）: {e}")
+
+    def _music_info_from_record(self, record: Dict[str, Any], quality: str) -> MusicInfo:
+        """用 root.db 记录构建 MusicInfo（缓存命中时避免重复上游调用）"""
+        return MusicInfo(
+            id=int(record["song_id"]),
+            name=record.get("name", ""),
+            artists=record.get("artists", ""),
+            album=record.get("album_name", ""),
+            album_id=record.get("album_id"),
+            pic_url="",
+            duration=int(record.get("duration", 0)),
+            track_number=0,
+            download_url="",
+            file_type=str(record.get("ext", ".mp3")).lstrip("."),
+            file_size=int(record.get("file_size", 0)),
+            quality=quality,
+        )
+
     # ----------- 下载（异步） -----------
 
     async def download_music_file_async(
@@ -319,27 +403,35 @@ class MusicDownloader:
         music_id: int,
         quality: str = "standard",
     ) -> DownloadResult:
-        """异步下载音乐到本地"""
+        """异步下载音乐到本地存储（命中缓存直接复用）"""
         try:
+            music_id = int(music_id)
+
+            cached = self.storage.get_cached_file(music_id, quality)
+            if cached is not None:
+                record = self.storage.song_with_file(music_id, quality)
+                if record is not None:
+                    return DownloadResult(
+                        success=True,
+                        file_path=str(cached),
+                        file_size=cached.stat().st_size,
+                        music_info=self._music_info_from_record(record, quality),
+                        cached=True,
+                    )
+
             music_info = self.get_music_info(music_id, quality)
             file_path = self._build_file_path(music_info)
 
-            if file_path.exists():
-                return DownloadResult(
-                    success=True,
-                    file_path=str(file_path),
-                    file_size=file_path.stat().st_size,
-                    music_info=music_info,
-                )
-
+            tmp_path = file_path.with_name(file_path.name + ".part")
             async with aiohttp.ClientSession() as session:
                 async with session.get(music_info.download_url) as resp:
                     resp.raise_for_status()
-                    async with aiofiles.open(file_path, "wb") as f:
+                    async with aiofiles.open(tmp_path, "wb") as f:
                         async for chunk in resp.content.iter_chunked(8192):
                             await f.write(chunk)
+            tmp_path.replace(file_path)
 
-            self._write_metadata_with_ffmpeg(file_path, music_info)
+            self._post_register(music_info, file_path)
 
             return DownloadResult(
                 success=True,
@@ -455,10 +547,12 @@ class MusicDownloader:
         self,
         file_path: Path,
         music_info: MusicInfo,
+        cover_local: Optional[Path] = None,
     ) -> bool:
         """使用 ffmpeg 写入音频元数据
 
         处理: title/artist/album/track + 封面（如果是 mp3/flac/m4a/mp4）
+        cover_local: 已落盘的封面文件（storage/<song_id>/cover.jpg），提供时不再重复下载
 
         Returns:
             是否写入成功（失败不影响主流程）
@@ -486,12 +580,14 @@ class MusicDownloader:
         cover_tmp: Optional[str] = None
 
         try:
-            # 下载封面到临时文件
-            if music_info.pic_url:
+            # 封面来源：优先使用已落盘文件；无则下载到临时文件
+            if cover_local is not None and cover_local.exists():
+                cover_tmp = str(cover_local)
+            elif music_info.pic_url:
                 try:
                     pic_resp = requests.get(music_info.pic_url, timeout=10)
                     pic_resp.raise_for_status()
-                    fd, cover_tmp = tempfile.mkstemp(suffix=".jpg", dir=str(self.download_dir))
+                    fd, cover_tmp = tempfile.mkstemp(suffix=".jpg", dir=str(self.storage.storage_dir))
                     os.close(fd)
                     with open(cover_tmp, "wb") as cf:
                         cf.write(pic_resp.content)
@@ -564,8 +660,8 @@ class MusicDownloader:
             self.logger.error(f"ffmpeg 写入元数据异常: {e}")
             return False
         finally:
-            # 清理封面临时文件
-            if cover_tmp and os.path.exists(cover_tmp):
+            # 清理封面临时文件（已持久化的 cover.jpg 不删）
+            if cover_tmp and cover_tmp != str(cover_local or "") and os.path.exists(cover_tmp):
                 try:
                     os.unlink(cover_tmp)
                 except OSError:

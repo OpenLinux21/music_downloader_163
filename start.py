@@ -180,7 +180,7 @@ def start_service() -> None:
     print("\n" + "=" * 60)
     print("🚀 网易云音乐API服务启动中...")
     print(f"📡 服务地址: http://{host}:{port}")
-    print(f"📁 下载目录: {main.api_service.downloads_path.absolute()}")
+    print(f"📁 存储目录: {main.api_service.storage_path.resolve()}")
     print("📚 API端点: / /health /song /search /playlist /album /download /api/info")
     print("🎵 支持的音质: standard, exhigh, lossless, hires, sky, jyeffect, jymaster, dolby")
     print("=" * 60)
