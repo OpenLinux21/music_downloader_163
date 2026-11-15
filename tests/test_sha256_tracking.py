@@ -167,9 +167,12 @@ def test_end_to_end(tmp: Path) -> None:
     assert r2.get_json()["data"]["cached"] is True, "哈希一致应命中复用"
 
     # 篡改 1 字节 → 服务端校验失败 → 删除重下 → 重新登记哈希 → 再提供
+    # 注意：read 后需回 seek 再写，确保目标字节必然翻转（否则可能写入相同值）
     with open(main_path, "r+b") as fh:
         fh.seek(1024)
-        fh.write(b"\x00" if fh.read(1) != b"\x00" else b"\x01")
+        original = fh.read(1)
+        fh.seek(1024)
+        fh.write(b"\x00" if original != b"\x00" else b"\x01")
     r3 = client.post("/download", json={"id": str(song_id), "quality": quality, "format": "json"})
     d3 = r3.get_json()
     assert r3.status_code == 200 and d3["data"]["cached"] is False, d3
