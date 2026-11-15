@@ -204,6 +204,11 @@
             <h5>🔥 下载排行榜 <small class="text-muted">TOP 20 · 按最近 30 天独立用户数</small></h5>
             <ol class="list-group list-group-numbered" id="rank-list"></ol>
         </div>
+        <!-- 智能推荐 -->
+        <div id="recommend-panel" class="mt-4 d-none">
+            <h5>🎵 智能推荐 <small class="text-muted">基于你的下载 · 每次 5 首 · 已标注缓存音质与大小</small></h5>
+            <div class="list-group" id="recommend-list"></div>
+        </div>
         <!-- 结果展示区域 -->
         <div id="song-info" class="alert alert-info d-none mt-4 p-0 border-0" style="box-shadow:0 2px 8px rgba(0,0,0,0.07);">
             <div class="row g-0 align-items-stretch">
@@ -605,6 +610,30 @@
                 }, 'json');
             });
 
+            // 智能推荐：下载完成后按歌曲拉取并渲染（含缓存音质版本与大小）
+            function loadRecommendations(songId) {
+                if (!songId) { return; }
+                $.get('/recommend', { song_id: songId }, function(data) {
+                    const items = (data && data.data && data.data.recommendations) || [];
+                    if (!items.length) { $('#recommend-panel').addClass('d-none'); return; }
+                    $('#recommend-list').html(items.map(function(it) {
+                        const qualities = (it.qualities || []).map(function(q) {
+                            const sizeText = q.size ? ' · ' + (q.size / 1048576).toFixed(2) + 'MB' : '';
+                            return '<span class="badge bg-light text-dark border me-1">' + q.quality + sizeText + '</span>';
+                        }).join('');
+                        return '<div class="list-group-item">' +
+                            '<div class="d-flex justify-content-between align-items-center">' +
+                            '<span>' + it.name + ' <small class="text-muted">- ' + (it.artists || '') + '</small></span>' +
+                            '<button type="button" class="btn btn-sm btn-outline-primary" ' +
+                            'onclick="document.getElementById(\'download_id\').value=\'' + it.song_id + '\';document.getElementById(\'download_id\').scrollIntoView({behavior:\'smooth\'});">下载</button>' +
+                            '</div>' +
+                            '<div class="mt-1">' + qualities + '</div>' +
+                            '</div>';
+                    }).join(''));
+                    $('#recommend-panel').removeClass('d-none');
+                });
+            }
+
             // 下载排行榜（页面加载即拉取；空榜单隐藏）
             $.get('/rank', function(data) {
                 const items = (data && data.data && data.data.rank) || [];
@@ -681,6 +710,7 @@
                         if (downloadMessage) {
                             console.log(`服务器消息: ${downloadMessage}`);
                         }
+                        loadRecommendations(processedId);
                     } else {
                         alert('下载失败，请重试');
                     }

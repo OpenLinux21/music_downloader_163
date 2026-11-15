@@ -637,6 +637,34 @@ def download_rank(request: Request):
         return APIResponse.error(f"获取排行榜失败: {str(e)}", 500)
 
 
+@app.get('/recommend')
+@limiter.limit(RATE_MINUTE)
+@limiter.limit(RATE_HOUR)
+def recommend_api(request: Request, song_id: str = ""):
+    """智能推荐API（基于 root.db 特征：同歌手/歌名近似/同专辑/热门兜底，每次 5 首）
+
+    推荐项为缓存中已有的歌曲，qualities 列出实际缓存音质版本并标注文件大小（cached=True）。
+    """
+    try:
+        if not song_id or not song_id.strip():
+            return APIResponse.error("参数 'song_id' 不能为空", 400)
+        music_id = api_service._extract_music_id(song_id.strip())
+        try:
+            music_id_int = int(music_id)
+        except ValueError:
+            return APIResponse.error("song_id 必须是数字 ID 或可解析的网易云链接", 400)
+
+        recommendations = api_service.storage.recommend_for(music_id_int, limit=5)
+        return APIResponse.success(
+            {"song_id": music_id_int, "size": len(recommendations),
+             "recommendations": recommendations},
+            "获取智能推荐成功"
+        )
+    except Exception as e:
+        api_service.logger.error(f"获取推荐异常: {e}\n{traceback.format_exc()}")
+        return APIResponse.error(f"获取推荐失败: {str(e)}", 500)
+
+
 @app.get('/api/info')
 def api_info():
     """API信息接口"""
@@ -653,6 +681,7 @@ def api_info():
                 '/album': 'GET/POST - 获取专辑详情',
                 '/download': 'GET/POST - 下载音乐',
                 '/rank': 'GET - 下载排行榜（TOP 20）',
+                '/recommend': 'GET - 智能推荐（5 首，含音质版本与缓存大小）',
                 '/api/info': 'GET - API信息'
             },
             'supported_qualities': [

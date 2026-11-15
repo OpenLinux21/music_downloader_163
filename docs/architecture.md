@@ -101,7 +101,7 @@ Netease_url/
 ## 5. 并发与运行模型
 
 - Web 层：uvicorn 托管 FastAPI（ASGI 单进程，`access_log=False`，请求行由统一日志中间件输出）；路由为同步 `def`，FastAPI 自动派发到线程池执行；无生产级进程管理。
-- 限速：slowapi 按来源 IP（`get_remote_address`）对 `/search` `/song` `/playlist` `/album` `/download` `/rank` 应用每分钟/每小时双阈值（读自 `config.toml`，默认 10/25），超限 429；`/health` `/api/info` `/` 不限速。
+- 限速：slowapi 按来源 IP（`get_remote_address`）对 `/search` `/song` `/playlist` `/album` `/download` `/rank` `/recommend` 应用每分钟/每小时双阈值（读自 `config.toml`，默认 10/25），超限 429；`/health` `/api/info` `/` 不限速。
 - Cookie 读取：每个请求处理过程中调用 `load_cookies()` 实时读取 `config.toml` 的 `server.default_cookie` 并解析为字典，无缓存，修改配置即时生效。
 - 下载层：同步下载使用 `requests` 流式写入（先写 `.part` 临时文件，完成后原子改名）；异步/批量下载使用 `asyncio.Semaphore(3)` 限制并发（`MusicDownloader(max_concurrent=3)`）。
 - 元数据写入：调用外部 `ffmpeg` 进程（`subprocess.run`，超时 120 秒），ffmpeg 路径在启动时检测一次并在每次写入前懒加载重试（支持服务运行中途安装 ffmpeg）。

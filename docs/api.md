@@ -12,7 +12,7 @@
 | 请求方式 | GET / POST；POST 同时接受 JSON 体与表单（JSON 优先） |
 | 响应格式 | JSON（`/download` 默认返回音频文件流，`format=json` 时返回 JSON） |
 | 鉴权 | 无。服务不校验调用方身份；上游鉴权依赖 `config.toml` 中服务器默认 Cookie |
-| 限速 | slowapi 按来源 IP：业务路由（`/search` `/song` `/playlist` `/album` `/download` `/rank`）默认 10 次/分钟 + 25 次/小时（读自 `config.toml` 的 `api.*`），超限返回 429 统一结构；`/health`、`/api/info`、`/` 不限速（监控可用性优先） |
+| 限速 | slowapi 按来源 IP：业务路由（`/search` `/song` `/playlist` `/album` `/download` `/rank` `/recommend`）默认 10 次/分钟 + 25 次/小时（读自 `config.toml` 的 `api.*`），超限返回 429 统一结构；`/health`、`/api/info`、`/` 不限速（监控可用性优先） |
 | CORS | 跨域请求允许任意来源（`Access-Control-Allow-Origin: *`，CORSMiddleware 实现） |
 | Web 框架 | FastAPI（uvicorn 托管）；**2026-11-15 由 Flask 迁移，大写别名路由（`/Song_V1` 等）已移除，属破坏性变更，前端调用已同步改为小写路径** |
 
@@ -84,7 +84,7 @@
 
 说明：`cookie_status` 仅表示 `config.toml` 的 `server.default_cookie` 是否解析出非空 Cookie（`valid`/`invalid`），**不代表登录态真实有效**；`timestamp` 为 Unix 秒级时间戳。
 
-POST /song`（别名 `/Song_V1`）— 歌曲信息|POST /song`（别名 `/Song_V1`）— 歌曲信息
+### 4.3 `GET|POST /song` — 歌曲信息
 
 | 参数 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
@@ -210,9 +210,37 @@ POST /song {"id":"123","level":"xxx"}
 
 说明：`session_count` 为统计窗口（默认 30 天）内的**独立防刷会话数**——同一浏览器反复下载同一歌曲只计一次，仅真实完成交付计入；计数并列按歌曲名升序，TOP 20；已清理歌曲不入榜。防刷 Cookie 由服务端 HMAC-SHA256 签名（密钥仅服务端持有），外部脚本无法批量构造有效会话。
 
-### 4.9 `GET /api/info` — 服务信息
+### 4.9 `GET /recommend?song_id=` — 智能推荐（2026-11-15 新增）
 
-无参数。`data` 含 `name`（网易云音乐API服务）、`version`（2.0.0）、`endpoints`（7 个端点及说明）、`supported_qualities`（**当前为 7 项，缺 `dolby`，与其他接口校验列表不一致**）、`config`（`storage_dir` 存储目录绝对路径、`max_cache_mb` 缓存上限、`max_file_size` 500MB、`request_timeout` 30s）。
+| 参数 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `song_id` | 是 | 无 | 数字歌曲 ID（也可传可解析的网易云链接/短链） |
+
+`data` 结构：
+
+```json
+{
+  "song_id": 347230,
+  "size": 5,
+  "recommendations": [
+    {
+      "song_id": 601,
+      "name": "歌名",
+      "artists": "歌手",
+      "album_name": "专辑",
+      "qualities": [
+        {"quality": "lossless", "ext": ".flac", "size": 8912841, "cached": true}
+      ]
+    }
+  ]
+}
+```
+
+推荐算法（数据来源 `root.db`，实现于 `StorageManager.recommend_for`）：候选池为缓存中已有的歌曲（排除自身），打分 = 同歌手 +3、歌名近似（difflib 相似度 ≥ 0.55）+ 相似度×2、同专辑 +1；不足 5 首时按访问量降序以热门缓存歌曲兜底补足。每项 `qualities` 列出实际缓存音质版本并标注文件大小（`cached=true`），点击可直接命中下载。错误：400（缺参/非法 ID）。
+
+### 4.10 `GET /api/info` — 服务信息
+
+无参数。`data` 含 `name`（网易云音乐API服务）、`version`（2.0.0）、`endpoints`（9 个端点及说明）、`supported_qualities`（**当前为 7 项，缺 `dolby`，与其他接口校验列表不一致**）、`config`（`storage_dir` 存储目录绝对路径、`max_cache_mb` 缓存上限、`max_file_size` 500MB、`request_timeout` 30s）。
 
 ## 5. 输入解析规则（重要）
 

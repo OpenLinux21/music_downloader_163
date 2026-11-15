@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import shutil
 import sqlite3
@@ -334,6 +335,83 @@ class StorageManager:
                 (song_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ----------- 智能推荐 -----------
+
+    NAME_SIMILAR_THRESHOLD = 0.55  # 歌名近似判定阈值（difflib 相似度）
+
+    def recommend_for(self, song_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        """基于 root.db 特征数据的智能推荐（每次最多 limit 首，默认 5）
+
+        打分维度（仅候选缓存中已有的歌曲，排除自身）：
+        - 同歌手（歌手名任一交集）：+3.0
+        - 歌名近似（difflib 相似度 ≥ 0.55）：+ 相似度 × 2.0
+        - 同专辑：+1.0
+        候选不足 limit 时按访问量降序以热门缓存歌曲兜底补足。
+        每项展示实际缓存的音质版本列表（cached=True 并标注文件大小）。
+        """
+        origin = self.song_stats(song_id)
+        if not origin:
+            return []
+
+        origin_artists = set(filter(None, (origin.get("artists") or "").replace("/", " ").split()))
+        origin_name = origin.get("name") or ""
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT s.song_id AS song_id, s.name AS name, s.artists AS artists,
+                       s.album_id AS album_id, s.album_name AS album_name,
+                       s.visit_count AS visit_count
+                FROM songs s
+                JOIN files f ON f.song_id = s.song_id AND f.is_copy = 0
+                WHERE s.song_id != ?
+                GROUP BY s.song_id
+                """,
+                (song_id,),
+            ).fetchall()
+
+        scored: List[Tuple[float, int, int, sqlite3.Row]] = []
+        for r in rows:
+            score = 0.0
+            cand_artists = set(filter(None, (r["artists"] or "").replace("/", " ").split()))
+            if origin_artists & cand_artists:
+                score += 3.0
+            ratio = difflib.SequenceMatcher(None, origin_name, r["name"] or "").ratio()
+            if ratio >= self.NAME_SIMILAR_THRESHOLD:
+                score += ratio * 2.0
+            if origin.get("album_id") is not None and r["album_id"] == origin["album_id"]:
+                score += 1.0
+            scored.append((score, int(r["visit_count"]), int(r["song_id"]), r))
+
+        scored.sort(key=lambda t: (-t[0], -t[1], t[2]))
+        picked = scored[:limit]
+        # 补足策略：相关候选不足时按访问量降序取热门缓存歌曲
+        if len(picked) < limit:
+            picked_ids = {t[2] for t in picked}
+            hot = sorted(
+                (r for r in rows if int(r["song_id"]) not in picked_ids),
+                key=lambda r: (-int(r["visit_count"]), int(r["song_id"])),
+            )
+            for r in hot:
+                if len(picked) >= limit:
+                    break
+                picked.append((0.0, int(r["visit_count"]), int(r["song_id"]), r))
+
+        results: List[Dict[str, Any]] = []
+        for _score, _visits, sid, _r in picked[:limit]:
+            qualities = [
+                {"quality": q["quality"], "ext": q["ext"], "size": q["size"], "cached": True}
+                for q in self.cached_qualities(sid)
+            ]
+            results.append({
+                "song_id": sid,
+                "name": _r["name"],
+                "artists": _r["artists"],
+                "album_name": _r["album_name"],
+                "qualities": qualities,
+            })
+        return results
 
     # ----------- 清理 -----------
 

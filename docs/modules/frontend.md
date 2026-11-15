@@ -63,6 +63,8 @@
 
 个人 Cookie（2026-11-15 新增）：输入框实时同步 `localStorage('netease_user_cookie')`（清空输入即移除），下载请求以 `user_cookie` 字段随 body 发送；凭据不进入任何 Cookie（document.cookie）也不经 URL 传递。
 
+智能推荐（2026-11-15 新增）：下载完成后自动 `GET /recommend?song_id=` 拉取并渲染推荐区块（最多 5 首，每首展示名称/歌手 + 缓存音质版本与文件大小 badge，附「下载」按钮回填下载区）；无推荐时隐藏区块。
+
 ## 6. 已知缺陷与注意点
 
 1. **错误提示分支失效**（知识库已知问题 #8）：各请求失败分支读取 `data.data.msg`，但后端错误响应（`APIResponse.error`）不含 `data` 字段，会抛 `TypeError`，用户看不到错误原因。修改错误结构或前端时必须两边同步。
