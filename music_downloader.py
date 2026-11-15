@@ -12,7 +12,9 @@
 2. 显式 -f 指定输出格式 + 临时文件保留原扩展名在最后，双保险
 3. MP4（杜比全景声 EAC3）单独分支，启用 +faststart
 4. 扩展名优先使用 API 返回的 type 字段，URL/Content-Type 兜底
-5. 歌词经 -metadata lyrics= 嵌入容器（mp3=USLT / flac=LYRICS / m4a=©lyr）
+5. 歌词经 -metadata lyrics= 嵌入容器（flac=LYRICS / m4a=©lyr）；
+   mp3 的 ffmpeg muxer 无法写出 USLT（退化为 TXXX:USLT 自定义帧，播放器不识别），
+   故由 mutagen 补写标准 ID3v2 USLT 帧
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from typing import Any
 import aiofiles
 import aiohttp
 import requests
+from mutagen.id3 import ID3, USLT, ID3NoHeaderError
 
 from logger import get_logger
 from music_api import APIException, NeteaseAPI, load_cookies
@@ -775,6 +778,9 @@ class MusicDownloader:
                 # 原子替换原文件
                 shutil.move(str(tmp_output), str(file_path))
                 self.logger.info(f"元数据写入完成: {file_path.name}")
+                # mp3：ffmpeg 写不出标准 USLT 帧，由 mutagen 补写（失败仅告警）
+                if file_ext == ".mp3" and music_info.lyric and music_info.lyric.strip():
+                    self._embed_mp3_uslt(file_path, music_info.lyric)
                 return True
 
             self.logger.error(
@@ -805,6 +811,28 @@ class MusicDownloader:
                     tmp_output.unlink()
                 except OSError:
                     pass
+
+    def _embed_mp3_uslt(self, file_path: Path, lyric: str) -> bool:
+        """mp3 歌词补写为标准 ID3v2 USLT 帧
+
+        ffmpeg 的 mp3 muxer 写不出 USLT（-metadata lyrics= 退化为 TXXX:USLT
+        自定义帧，主流播放器不识别为歌词），故用 mutagen 原地补写：
+        清除退化帧后写入 USLT；ID3v2.3 下 mutagen 自动将 UTF-8 转为合规的
+        UTF-16 编码。失败仅告警（原 TXXX 兜底仍在），不阻断下载流程。
+        """
+        try:
+            tags = ID3(file_path)
+            tags.setall("TXXX:USLT", [])  # 清除 ffmpeg 退化帧，避免歌词双份存储
+            tags.setall("USLT", [USLT(encoding=3, lang="eng", desc="", text=lyric)])
+            tags.save(v2_version=3)
+            self.logger.info(f"mp3 歌词 USLT 帧写入完成: {file_path.name}")
+            return True
+        except ID3NoHeaderError:
+            self.logger.warning(f"mp3 USLT 写入跳过: 无 ID3 标签头 {file_path.name}")
+            return False
+        except Exception as e:
+            self.logger.warning(f"mp3 USLT 写入失败（歌词仍以 TXXX 兜底保留）: {e}")
+            return False
 
     def _build_format_args(self, file_ext: str, has_cover: bool) -> list[str]:
         """根据文件格式构造 mapping / 编码参数"""

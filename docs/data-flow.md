@@ -168,17 +168,27 @@ FileResponse zip 流 + X-Download-Filename / X-Batch-Total|Success|Failed
    │
    ▼
 subprocess.run 超时 120s
-   ├─ 成功 → shutil.move 原子替换原文件 → True
+   ├─ 成功 → shutil.move 原子替换原文件
+   │        └─ .mp3 且歌词非空 → mutagen 补写标准 USLT 帧（_embed_mp3_uslt）→ True
+   │           （ffmpeg 的 mp3 muxer 写不出 USLT，-metadata lyrics= 退化为
+   │             TXXX:USLT 自定义帧；mutagen 清除退化帧后写入标准 USLT，
+   │             ID3v2.3 下自动转 UTF-16 编码，失败仅告警不阻断）
    └─ 失败/超时/异常 → DOWNLOADER 日志告警 → False（下载结果不受影响）
    │
    ▼
 finally：删除封面临时文件（已落盘 cover.jpg 不删）与残留 .tagging 文件
 ```
 
-歌词嵌入（`lyrics` 键，2026-11-15 新增）：歌词原文非空时随 `-metadata lyrics=` 写入，
-使文件独立携带歌词、无需外部 .lrc。本机 ffmpeg 9.0.2 逐格式 ffprobe 实测：
-`.mp3` 写入 ID3v2 USLT、`.flac` 写入 Vorbis `LYRICS` 注释、`.m4a` 写入 `©lyr` 原子，
-三种格式确认支持；`.ogg`/`.opus`/`.mp4` 未逐一实测（失败不阻断）。
+歌词嵌入（`lyrics` 键，2026-11-15 新增；mp3 补写 USLT 于 2026-11-16 修正）：
+歌词原文非空时随 `-metadata lyrics=` 写入，使文件独立携带歌词、无需外部 .lrc。
+本机 ffmpeg 9.0.2 逐格式实测：`.flac` 写入 Vorbis `LYRICS` 注释、`.m4a` 写入 `©lyr` 原子，
+ffprobe 可读回确认；`.ogg`/`.opus`/`.mp4` 未逐一实测（失败不阻断）。
+`.mp3` 特殊：ffmpeg 识别 lyrics 键应映射 USLT 但 muxer 未实现写入，实际产出
+`TXXX:USLT` 退化帧——ffprobe 读回时把它翻译回 `lyrics` 标签，掩盖真实帧型
+（首次实测即因此误判「mp3=USLT」），主流播放器不识别该退化帧为歌词；
+故 mp3 在 ffmpeg 成功后追加 `_embed_mp3_uslt`（mutagen）：清除 `TXXX:USLT`、
+写入标准 `USLT` 帧（`save(v2_version=3)`，mutagen 自动将 UTF-8 转为 v2.3
+合规的 UTF-16），经 mutagen 读回验证中文 LRC 无损、封面/标题等其余帧全部保留。
 
 各格式专属参数（`_build_format_args`）：
 

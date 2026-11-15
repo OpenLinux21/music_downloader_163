@@ -18,6 +18,7 @@ httpx==0.28.1
 idna==3.10
 limits==5.8.0
 multidict==6.6.4
+mutagen==1.48.1
 packaging==26.3
 propcache==0.3.2
 pycparser==2.22

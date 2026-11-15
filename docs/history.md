@@ -154,6 +154,13 @@
 取舍：不改 `api.js` 与任何请求/状态/事件逻辑（业务行为零变更，仅展示层重排）；不引入 Tailwind/CSS-in-JS/动画库（CSS transition 足够）；不做玻璃拟态/大面积渐变/深色模式；Logo 用用户提供的 `music.svg` 直接 `<img>` 引用（黑色单色填充，契合极简风格，不再包红色容器）。
 风险边界：`npm run build` 通过；无头 Chrome（puppeteer-core + 系统 Chrome，仅装于 /tmp 不入仓库）对真实后端完成全 Tab 交互冒烟——Cookie 展开、搜索、单曲解析（含试听与歌词）、歌单解析（热歌榜）、专辑解析（Jay，封面/发行时间/简介展开）、下载页布局、移动端视口截图均通过且控制台除 favicon 404（项目本无 favicon，既有现象）外无错误。
 
+### 2.21 mp3 歌词 USLT 帧修正（2026-11-16，fix/mp3-uslt-lyrics）
+
+背景：用户专辑打包下载（exhigh → 全 mp3）发现播放器无歌词。实证定位：ffmpeg 9.0.2 的 mp3 muxer **写不出 ID3v2 USLT 帧**——`-metadata lyrics=` 被识别应映射 USLT 但未实现写入，实际产出 `TXXX:USLT` 退化帧，主流播放器不识别为歌词；而 ffprobe 读回时把该退化帧翻译回 `lyrics` 标签展示，与写入端构成同一盲区，导致 2.13 节首次实测误判「mp3=USLT」。FLAC（Vorbis `LYRICS`）/M4A（`©lyr`）经实参逐字节核验（帧结构解析）确认真实正确。
+决策：`_write_metadata_with_ffmpeg` 成功后对 `.mp3` 且歌词非空追加 `_embed_mp3_uslt`（mutagen）：清除 `TXXX:USLT`、写入标准 `USLT` 帧（`save(v2_version=3)`，mutagen 自动转 UTF-16 合规编码）；失败仅告警不阻断（退化帧兜底仍在）。新增固定依赖 mutagen==1.48.1（纯 Python 零传递依赖；引入理由：ffmpeg 各歌词键实测均只产出 TXXX、无法配置出 USLT，手写 ID3v2 帧解析/注入约需上百行高风险代码）。存量修复以幂等脚本 `scripts/repair_mp3_uslt.py` 完成（退化帧转换 / 无来源者从 `lyric.lrc` 注入，修复后重登记哈希与 size，避免缓存命中误判损坏），32 个真实 mp3（主文件 + 专辑副本）全部修复。
+取舍：歌词校验改用 mutagen 而非 ffprobe（后者不透出 USLT、又会翻译退化帧）；不保留 `TXXX:USLT` 双帧（无播放器读取该形态，双份存储徒增体积）；flac/m4a 路径不动（ffmpeg 原生行为正确）。
+验证：mp3/flac/m4a 三格式自检 + `-m upstream` 真实链路端到端全过；存量修复后逐一核验 USLT 有无、哈希一致、DB size 与磁盘一致。
+
 ## 3. 历史遗留与不一致（详见 docs/knowledge-base.md）
 
 - `entrypoint.sh` 的 `--level/--mode/--url` 与 `.env` 变量为 Docker 化时期产物，`main.py` 从未实现对应参数解析（已知问题 #2）。**已于 2026-11-15 随统一启动入口任务废除**：`entrypoint.sh` 改调 `start.py`，`.env` 删除。

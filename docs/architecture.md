@@ -28,7 +28,8 @@ Netease_url/
 ├── frontend/                # React + Vite + AntD 前端工程（源码提交；dist/node_modules 不入库）
 │   ├── index.html / vite.config.js / package.json / package-lock.json
 │   └── src/                 # App.jsx（页面组件）、api.js（API 封装）、main.jsx、styles.css
-├── requirements.txt        # Python 依赖（33 个包，全部固定版本；2026-11-15 移除 Flask 系，新增 FastAPI/uvicorn/slowapi）
+├── requirements.txt        # Python 依赖（34 个包，全部固定版本；2026-11-16 新增 mutagen 用于 mp3 USLT 歌词帧补写）
+├── scripts/                   # 一次性维护脚本（repair_mp3_uslt.py：存量 mp3 歌词 USLT 帧补写，幂等可重跑）
 ├── ruff.toml / pytest.ini  # 开发工具链配置：ruff 代码检查门禁（E/F/I/B/UP）与 pytest 测试入口（2026-11-16 引入）
 ├── Dockerfile              # 多阶段构建：node:22-alpine 构建前端 → python:3.12-alpine3.23 + ffmpeg 运行
 ├── docker-compose.yml      # 单服务编排（可选挂载 config.toml）
@@ -48,7 +49,7 @@ Netease_url/
 | 上游 HTTP | requests 2.28.2（同步）、aiohttp 3.12.15 + aiofiles 24.1.0（异步下载） | `requirements.txt` |
 | 加密 | cryptography 40.0.2（AES-ECB + PKCS7，用于 eapi 参数加密） | `music_api.py` 的 `CryptoUtils` |
 | 二维码 | qrcode 8.2（终端 ASCII 二维码） | `music_api.py` 的 `QRLoginManager.create_qr_login()` |
-| 音频处理 | ffmpeg（系统二进制，非 Python 包；Docker 内通过 `apk add ffmpeg` 安装） | `Dockerfile`、`music_downloader.py` |
+| 音频处理 | ffmpeg（系统二进制，非 Python 包；Docker 内通过 `apk add ffmpeg` 安装）+ mutagen 1.48.1（mp3 标准歌词帧 ID3v2 USLT 补写——ffmpeg mp3 muxer 写不出 USLT，退化帧播放器不识别） | `Dockerfile`、`music_downloader.py` 的 `_embed_mp3_uslt`、知识库事实 35 |
 | 前端 | React 19 + Ant Design 5 + Vite 7（npm 构建，资源本地打包，**无 CDN 外链依赖**）；产物 `frontend/dist` 由 FastAPI 托管（`/` 与 `/assets`） | `frontend/`、`main.py` 的 `FRONTEND_DIST` |
 | 配置 | TOML，标准库 `tomllib` 解析；`config.toml` 为唯一配置来源（缺省回落内置默认值） | `config_loader.py` |
 | 日志 | 标准库 `logging` + 自研 GIN 风格 formatter：控制台（ANSI 着色）+ `logs/service.log`（5MB 轮转 ×3，无着色） | `logger.py` |

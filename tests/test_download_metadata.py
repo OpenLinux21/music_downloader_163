@@ -1,8 +1,10 @@
 """下载与元数据自检（pytest 管理）
 
 覆盖范围：
-1. 歌词嵌入实证（本地 ffmpeg/ffprobe，无上游）：mp3/flac/m4a 三种格式写入
-   lyrics + 基础元数据后，用 ffprobe 验证各容器真实落tag情况
+1. 歌词嵌入实证（本地 ffmpeg/ffprobe/mutagen，无上游）：mp3/flac/m4a 三种格式写入
+   lyrics + 基础元数据后验证各容器真实落tag情况——mp3 读 mutagen USLT 标准帧
+   （ffprobe 会把 ffmpeg 退化帧 TXXX:USLT 翻译回 lyrics 标签，掩盖真实帧型），
+   flac/m4a 用 ffprobe 验证
 2. 限速器：_RateLimiter 平均速率收敛（200KB/s 传 400KB 约 2s）；不限速零等待
 3. 多线程分段下载：本地支持 Range 的 HTTP 服务器（206）→ 4 段并发拼接结果与源一致
 4. 回退单流：不支持 Range 的服务器（200）→ 自动回退，结果一致
@@ -22,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from mutagen.id3 import ID3
 
 from music_downloader import MusicDownloader, MusicInfo, _RateLimiter
 
@@ -51,6 +54,21 @@ def _probe_tags(path: Path) -> dict:
     return tags
 
 
+def _probe_lyric(path: Path, ext: str) -> bool:
+    """歌词嵌入校验
+
+    mp3 必须为标准 ID3v2 USLT 帧，且 ffmpeg 退化帧 TXXX:USLT 已清除
+    （ffprobe 不透出 USLT、又会把 TXXX:USLT 翻译回 lyrics 标签，故不走 ffprobe）；
+    其余容器读 ffprobe 的 lyrics 标签。
+    """
+    if ext == "mp3":
+        tags = ID3(path)
+        uslt = tags.getall("USLT")
+        return bool(uslt) and bool(str(uslt[0].text).strip()) and not tags.getall("TXXX:USLT")
+    tags = _probe_tags(path)
+    return any(k.lower() == "lyrics" and str(v).strip() for k, v in tags.items() if k != "_streams")
+
+
 LYRIC = "[00:01.00]第一句歌词\n[00:02.00]第二句歌词"
 
 
@@ -72,16 +90,17 @@ def test_lyric_embedding(tmp: Path) -> None:
         dest = tmp / f"tagged.{ext}"
         shutil.copy2(src, dest)
         ok = dl._write_metadata_with_ffmpeg(dest, info)
+        has_lyric = _probe_lyric(dest, ext)
         tags = _probe_tags(dest)
-        has_lyric = any(k.lower() == "lyrics" and str(v).strip() for k, v in tags.items() if k != "_streams")
         has_title = any(k.lower() == "title" for k, v in tags.items() if k != "_streams")
-        # 基础元数据三格式必须全部成立；歌词按实测结果记录（mp3/flac/m4a 预期均支持）
+        # 基础元数据三格式必须全部成立；歌词按容器分别校验
+        # （mp3=mutagen 标准 USLT 帧 / flac、m4a=ffprobe lyrics 标签）
         summary.append((ext, ok, has_lyric, has_title))
 
     for ext, write_ok, has_lyric, has_title in summary:
         assert write_ok, f"{ext} 元数据写入失败"
         assert has_title, f"{ext} 基础元数据写入失败"
-        assert has_lyric, f"{ext} 歌词未嵌入（需核查 ffmpeg 行为）"
+        assert has_lyric, f"{ext} 歌词未嵌入（需核查嵌入行为）"
 
 
 def test_rate_limiter() -> None:
@@ -189,7 +208,10 @@ def test_end_to_end() -> None:
     assert tag_pairs.get("title") == "海阔天空", f"title 异常: {tag_pairs.get('title')}"
     assert "Beyond" in tag_pairs.get("artist", ""), f"artist 异常: {tag_pairs.get('artist')}"
     assert tag_pairs.get("album") == "海阔天空", f"album 异常: {tag_pairs.get('album')}"
-    assert tag_pairs.get("lyrics", "").startswith("["), f"歌词未嵌入: {tag_pairs.get('lyrics')[:30]!r}"
+    # mp3 歌词为 mutagen 补写的标准 USLT 帧（ffprobe 不透出 USLT，见 _probe_lyric 注释）
+    uslt = ID3(file_path).getall("USLT")
+    assert uslt and str(uslt[0].text).startswith("["), "mp3 歌词未以标准 USLT 帧嵌入"
+    assert not ID3(file_path).getall("TXXX:USLT"), "ffmpeg 退化帧 TXXX:USLT 未清除"
     assert "video" in tags["_streams"], "封面流缺失"
     assert tags["_stream_tags"].get("comment") == "Cover (front)", "封面流标记缺失"
 

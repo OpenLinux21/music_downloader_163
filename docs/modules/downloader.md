@@ -99,9 +99,9 @@ MusicDownloader(storage_dir="storage", max_concurrent=3, ffmpeg_path=None,
 1. **前置检查**：ffmpeg 可解析、扩展名 ∈ `METADATA_FORMATS`、文件存在；任一不满足直接返回 `False` 并经 `DOWNLOADER` 日志器告警。
 2. **封面**：优先使用 `_post_register` 已落盘的 `storage/<song_id>/cover.jpg`（`cover_local` 参数）；未提供时回退下载为 `storage/` 下 `mkstemp` 临时 `.jpg`（finally 清理，已落盘文件不删）；下载失败降级为无封面继续。
 3. **命令构造顺序**：全局选项 → `-i` 音频 →（可选）`-i` 封面 → `-metadata` 序列 → 格式专属参数 → `-f` muxer（必须位于 `-i` 之后作为输出选项）→ 输出文件 `原名.tagging.原扩展名`。
-4. **写入的元数据键**：`title`、`artist`、`album`、`album_artist`、`comment`（固定为 `Downloaded from Netease Cloud Music`）、`track`/`tracktotal`（`track_number > 0` 时，两者同值）、**`lyrics`**（歌词原文非空时写入，2026-11-15 新增）。歌词嵌入经本机 ffmpeg 9.0.2 逐格式实测（ffprobe 验证）：`.mp3`→ID3v2 USLT、`.flac`→Vorbis `LYRICS` 注释、`.m4a`→`©lyr` 原子，三种格式均确认可写回；`.ogg`/`.opus`/`.mp4` 未逐一实测，行为随 muxer 而定（失败不阻断，见第 6 条）。
+4. **写入的元数据键**：`title`、`artist`、`album`、`album_artist`、`comment`（固定为 `Downloaded from Netease Cloud Music`）、`track`/`tracktotal`（`track_number > 0` 时，两者同值）、**`lyrics`**（歌词原文非空时写入，2026-11-15 新增）。歌词嵌入逐格式实测：`.flac`→Vorbis `LYRICS` 注释、`.m4a`→`©lyr` 原子（ffprobe 可读回）；`.ogg`/`.opus`/`.mp4` 未逐一实测，行为随 muxer 而定（失败不阻断，见第 6 条）。**`.mp3` 特殊（2026-11-16 修正）**：ffmpeg 的 mp3 muxer 写不出 USLT，`-metadata lyrics=` 实际退化为 `TXXX:USLT` 自定义帧（ffprobe 读回时翻译回 `lyrics` 标签，曾据此误判为 USLT；主流播放器不识别为歌词）；故 ffmpeg 成功后由 `_embed_mp3_uslt`（mutagen）清除退化帧并补写标准 `USLT` 帧（ID3v2.3 下自动转 UTF-16 编码，mutagen 读回验证中文无损、其余帧保留），歌词校验须用 mutagen 而非 ffprobe（见 `tests/test_download_metadata.py` 的 `_probe_lyric`）。
 5. **原子性**：`subprocess.run` 成功且临时文件存在时 `shutil.move` 替换原文件；超时 120 秒；`finally` 中清理封面临时文件与残留 `.tagging` 文件。
-6. **失败语义**：一切失败仅经 `DOWNLOADER` 日志器告警（WARNING/ERROR）并返回 `False`，调用方（下载流程）不受影响。
+6. **失败语义**：一切失败仅经 `DOWNLOADER` 日志器告警（WARNING/ERROR）并返回 `False`，调用方（下载流程）不受影响；mp3 的 mutagen USLT 补写失败同样仅告警（歌词仍以 `TXXX:USLT` 兜底保留），不改变返回值语义。
 
 ## 8. 命令行入口（CLI）
 
