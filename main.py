@@ -26,7 +26,7 @@ try:
     )
     from music_downloader import MusicDownloader, DownloadException, AudioFormat
     from config_loader import get_config
-    from logger import get_logger, log_request, quiet_http_server_logs
+    from logger import get_logger, log_request
 except ImportError as e:
     print(f"导入模块失败: {e}")
     print("请确保所有依赖模块存在且可用")
@@ -604,7 +604,7 @@ def api_info():
                 '/api/info': 'GET - API信息'
             },
             'supported_qualities': [
-                'standard', 'exhigh', 'lossless', 
+                'standard', 'exhigh', 'lossless',
                 'hires', 'sky', 'jyeffect', 'jymaster'
             ],
             'config': {
@@ -613,54 +613,10 @@ def api_info():
                 'request_timeout': f"{config.request_timeout}s"
             }
         }
-        
+
         return APIResponse.success(info, "API信息获取成功")
-        
+
     except Exception as e:
         api_service.logger.error(f"获取API信息异常: {e}")
         return APIResponse.error(f"获取API信息失败: {str(e)}", 500)
-
-
-def start_api_server():
-    """启动API服务器"""
-    try:
-        quiet_http_server_logs()  # 压制 Werkzeug 自带请求日志，避免重复
-        print("\n" + "="*60)
-        print("🚀 网易云音乐API服务启动中...")
-        print("="*60)
-        print(f"📡 服务地址: http://{config.host}:{config.port}")
-        print(f"📁 下载目录: {api_service.downloads_path.absolute()}")
-        print(f"📋 日志级别: {config.log_level}")
-        print("\n📚 API端点:")
-        print(f"  ├─ GET  /health        - 健康检查")
-        print(f"  ├─ POST /song          - 获取歌曲信息")
-        print(f"  ├─ POST /search        - 搜索音乐")
-        print(f"  ├─ POST /playlist      - 获取歌单详情")
-        print(f"  ├─ POST /album         - 获取专辑详情")
-        print(f"  ├─ POST /download      - 下载音乐")
-        print(f"  └─ GET  /api/info      - API信息")
-        print("\n🎵 支持的音质:")
-        print(f"  standard, exhigh, lossless, hires, sky, jyeffect, jymaster")
-        print("="*60)
-        print(f"⏰ 启动时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print("🌟 服务已就绪，等待请求...\n")
-        
-        # 启动Flask应用
-        app.run(
-            host=config.host,
-            port=config.port,
-            debug=config.debug,
-            threaded=True
-        )
-        
-    except KeyboardInterrupt:
-        print("\n\n👋 服务已停止")
-    except Exception as e:
-        api_service.logger.error(f"启动服务失败: {e}")
-        print(f"❌ 启动失败: {e}")
-        sys.exit(1)
-
-
-if __name__ == '__main__':
-    start_api_server()
 

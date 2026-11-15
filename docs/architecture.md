@@ -14,7 +14,8 @@
 
 ```text
 Netease_url/
-├── main.py                 # Web 服务层：Flask 应用、全部 HTTP 路由、启动入口（唯一入口）
+├── start.py                 # 统一启动入口：启动前四项自检（依赖/配置文件/配置项/端口），通过后启动服务
+├── main.py                 # Web 服务层：Flask 应用与全部 HTTP 路由（不含启动逻辑）
 ├── music_api.py            # 网易云 API 封装：eapi 加密、HTTP 客户端、二维码登录、Cookie 工具
 ├── music_downloader.py     # 音乐下载器：同步/异步/批量下载、ffmpeg 元数据写入、CLI 入口
 ├── qr_login.py             # 二维码登录 CLI 工具：Cookie 读写/备份/校验（与 music_api 存在接口不匹配，见知识库）
@@ -26,9 +27,8 @@ Netease_url/
 │   └── index.html          # 唯一前端页面（jQuery + Bootstrap + APlayer，单文件应用）
 ├── requirements.txt        # Python 依赖（26 个包，全部固定版本）
 ├── Dockerfile              # python:3.12-alpine3.23 + ffmpeg
-├── docker-compose.yml      # 单服务编排（引用 .env）
-├── entrypoint.sh           # 容器启动脚本（参数实际无效，详见 docs/deployment.md）
-├── .env                    # 环境变量（LEVEL/MODE/URL，当前均不被程序读取）
+├── docker-compose.yml      # 单服务编排（可选挂载 config.toml）
+├── entrypoint.sh           # 容器启动脚本：生成默认配置后调用 python3 start.py
 ├── README.md / 使用文档.md  # 面向使用者的说明（部分内容与代码存在出入，以本文档体系为准）
 ├── downloads/              # 下载产物目录（运行时生成，未被 .gitignore 覆盖）
 └── logs/                   # 统一日志目录（service.log + 轮转备份，已被 .gitignore 覆盖）
@@ -39,7 +39,7 @@ Netease_url/
 | 类别 | 内容 | 依据 |
 | --- | --- | --- |
 | 语言 | Python 3.12（本机 `.venv` 实测 3.12.16；Docker 镜像 `python:3.12-alpine3.23`） | `.venv/lib/python3.12/`、`Dockerfile` |
-| Web 框架 | Flask 3.0.3（开发服务器 `app.run`，多线程模式，未使用生产级 WSGI 服务器） | `main.py` 的 `start_api_server()` |
+| Web 框架 | Flask 3.0.3（开发服务器 `app.run`，多线程模式，未使用生产级 WSGI 服务器） | `start.py` 的 `start_service()` |
 | 上游 HTTP | requests 2.28.2（同步）、aiohttp 3.12.15 + aiofiles 24.1.0（异步下载） | `requirements.txt` |
 | 加密 | cryptography 40.0.2（AES-ECB + PKCS7，用于 eapi 参数加密） | `music_api.py` 的 `CryptoUtils` |
 | 二维码 | qrcode 8.2（终端 ASCII 二维码） | `music_api.py` 的 `QRLoginManager.create_qr_login()` |
@@ -60,7 +60,10 @@ Netease_url/
                                    │ HTTP (GET/POST)
                                    ▼
 ┌──────────────────────────────────────────────────────────┐
-│ main.py  （Web 服务层，唯一启动入口）                       │
+│ start.py （统一启动入口：四项自检 → import main → 启动）     │
+│                    │                                     │
+│                    ▼                                     │
+│ main.py  （Web 服务层：Flask 应用与全部路由）                │
 │  Flask 路由: / /health /song /search /playlist           │
 │             /album /download /api/info                   │
 │  （每个业务路由均注册大写开头别名以向后兼容）                  │
@@ -83,7 +86,7 @@ Netease_url/
 
 要点：
 
-1. `main.py` 是唯一对外入口，启动时实例化 `MusicAPIService`（内含 `NeteaseAPI` 与 `MusicDownloader` 各一份），模块级创建 Flask `app`。
+1. `start.py` 是唯一启动入口（四项自检通过后才导入 `main`）；`main.py` 在被导入时实例化 `MusicAPIService`（内含 `NeteaseAPI` 与 `MusicDownloader` 各一份），模块级创建 Flask `app`。
 2. `music_downloader.py` 内部再次实例化自己的 `NeteaseAPI`，因此一次 `/download` 请求会对上游产生重复调用（详见 `docs/data-flow.md`）。
 3. `qr_login.py` 只依赖 `music_api.py`，用于运维人员手动登录获取 Cookie，不参与 Web 服务。
 4. `music_api.py` 与 `music_downloader.py` 各自定义了 `QualityLevel` 枚举（内容一致，属重复定义，修改音质时两处都要改，见 `docs/doc-maintenance.md`）。

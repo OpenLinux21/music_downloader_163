@@ -87,8 +87,10 @@ pip install -r requirements.txt
 
 #### 4. 启动服务
 ```bash
-python main.py
+python start.py
 ```
+
+> 启动前会自动执行四项自检（依赖安装、配置文件可解析、配置项合法、端口占用）并逐行输出结果。
 
 #### 5. 访问界面
 打开浏览器访问：`http://localhost:5000`
@@ -273,7 +275,7 @@ Content-Type: application/json
 
 1. **修改参数**
 
-   - 如需修改端口，请编辑 `.env` 或 `docker-compose.yml` 文件中的 `ports` 配置，例如：
+   - 如需修改端口，请编辑 `docker-compose.yml` 文件中的 `ports` 配置，例如：
 
      ```yaml
      ports:

@@ -11,7 +11,7 @@
   - 本项目 `.venv` 虚拟环境实测为 Python 3.12.16（`.venv/lib/python3.12/`）；
   - `Dockerfile` 基于 `python:3.12-alpine3.23`；
   - `README.md` 与 `使用文档.md` 均注明推荐 Python 3.12 与 Docker 镜像一致。
-- 运行入口：`python main.py`（程序不解析任何命令行参数；`entrypoint.sh` 传入的 `--level/--mode/--url` 当前不被程序读取，详见 `docs/deployment.md`）。
+- 运行入口：`python start.py`（2026-11-15 经用户确认改为统一启动入口：启动前执行依赖安装、配置文件可解析、配置项合法、端口占用四项检查并逐行输出结果；`main.py` 仅承载 Flask 应用定义与路由。原 `entrypoint.sh` 传入的 `--level/--mode/--url` 参数与 `.env` 变量属无效遗留，已随入口统一废除，详见 `docs/deployment.md`）。
 - 依赖安装：`pip install -r requirements.txt`（全部为固定版本）。
 
 ## 2. 全局开发约束

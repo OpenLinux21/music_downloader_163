@@ -18,6 +18,7 @@
 | 维护 | `18b28be` chore: ignore music_api.log | 将运行日志纳入 .gitignore |
 | 配置系统 | `feat/config-system` 分支（2026-11-15） | 引入 `config.toml` 配置体系与 `config_loader.py`；Cookie 自 `cookie.txt` 迁入配置并废弃原文件 |
 | 统一日志 | `feat/logging-system` 分支（2026-11-15） | 新增 `logger.py`（GIN 风格请求行/事件行），废除 `music_api.log` 双写 |
+| 统一启动入口 | `feat/start-entry` 分支（2026-11-15） | 新增 `start.py` 四项自检入口；废除 `.env` 与无效启动参数；AGENTS.md 入口声明经用户授权修订 |
 
 ## 2. 重要设计决策及动机（依据代码现状推断与提交记录）
 
@@ -73,9 +74,16 @@
 取舍：用户要求"控制台 + 文件各一份"，文件侧用 `RotatingFileHandler`（5MB × 3）防无限增长，且文件内容剥离 ANSI 码（避免污染终端之外的消费场景）；`qr_login.py` 为独立交互 CLI，保持自带 logging/print，不纳入统一日志（避免破坏 CLI 交互界面）。
 附带修复：移除 `music_downloader.get_music_info()` 的调试残留 `print(url_result)`（知识库已知问题 #6），下载器库内事件全部改经 `DOWNLOADER` 组件日志器。
 
+### 2.10 统一启动入口 start.py（2026-11-15，feat/start-entry）
+
+决策：`start.py` 成为唯一启动入口，启动前依次执行依赖安装、配置文件存在与可解析、配置项合法性、端口占用四项检查并逐行输出结果，全部通过后才 `import main` 初始化服务；`main.py` 移除 `start_api_server()` 与 `__main__` 块，只保留应用定义。容器侧 `entrypoint.sh` 改为「未挂载配置时生成默认 config.toml（host 置 0.0.0.0）→ `python3 start.py`」，删除 `.env` 与无效的 `--level/--mode/--url` 参数（知识库已知问题 #2 修复，待确认事项 #2 一并关闭）。
+动机：配置体系落地后需要统一的启动前校验点，把配置错误、端口冲突等问题拦截在服务初始化之前；同时消除从未生效的参数/环境变量通道。
+授权说明：AGENTS.md 第 1 节「运行入口」声明属固定内容，本次经用户明确确认后修订为 `python start.py`。
+取舍：端口检查用 `socket` 试绑定存在微小 TOCTOU 窗口（检查后、绑定前被抢占），定位为启动预警而非强互斥，真实的绑定冲突仍由 `app.run` 阶段的 `OSError` 兜底。
+
 ## 3. 历史遗留与不一致（详见 docs/knowledge-base.md）
 
-- `entrypoint.sh` 的 `--level/--mode/--url` 与 `.env` 变量为 Docker 化时期产物，`main.py` 从未实现对应参数解析（已知问题 #2）。
+- `entrypoint.sh` 的 `--level/--mode/--url` 与 `.env` 变量为 Docker 化时期产物，`main.py` 从未实现对应参数解析（已知问题 #2）。**已于 2026-11-15 随统一启动入口任务废除**：`entrypoint.sh` 改调 `start.py`，`.env` 删除。
 - `qr_login.py` 编写时所依赖的 `QRLoginManager` 返回结构（字典）在后续重构中变更为字符串/元组，未同步更新（已知问题 #1）。
 - `/download` 路由的缓存命名与下载器命名分属两个时期的设计，未统一（已知问题 #3）。
 - `QualityLevel` 枚举在两个模块重复定义且未被实际引用，是历次「音质列表硬编码在路由内」演进的残留（已知问题 #9/#10）。
