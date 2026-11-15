@@ -27,9 +27,9 @@ cp config.example.toml config.toml
 #    支持 "k1=v1; k2=v2" 单行格式或每行一对的格式。
 #    绑定地址默认 127.0.0.1（仅本机访问）；容器或局域网部署需改为 0.0.0.0。
 
-# 3. 启动服务
-python main.py
-# 或不激活 venv：.venv/bin/python main.py
+# 3. 启动服务（统一入口，启动前自动执行四项自检：依赖/配置文件/配置项/端口）
+python start.py
+# 或不激活 venv：.venv/bin/python start.py
 
 # 4. 验证
 curl http://localhost:5000/health
@@ -57,7 +57,7 @@ python music_downloader.py <music_id> [quality] [--download]  # 命令行查询/
 
 - 基础镜像 `python:3.12-alpine3.23`；额外安装 `ffmpeg`（`apk add --no-cache ffmpeg`）。
 - pip 使用阿里云镜像源安装 `requirements.txt`（全量固定版本）。
-- 时区 `TZ=Asia/Shanghai`；暴露端口 5000；启动命令为 `entrypoint.sh`。
+- 时区 `TZ=Asia/Shanghai`；暴露端口 5000；启动命令为 `entrypoint.sh`（未挂载配置时自动生成默认 `config.toml` 并将 `server.host` 改为 `0.0.0.0`，随后调用 `python3 start.py`）。
 
 ### 3.2 Docker Compose（推荐）
 
@@ -69,7 +69,7 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
-`docker-compose.yml` 通过 `env_file` 加载根目录 `.env`。
+`docker-compose.yml` 已移除 `env_file`（`.env` 随入口统一废除）；如需自定义配置/默认 Cookie，取消注释 `volumes` 挂载宿主机 `config.toml`。
 
 ### 3.3 纯 Docker
 
@@ -90,26 +90,11 @@ docker run -d -p 5000:5000 -v ./config.toml:/app/config.toml netease-music-api
 
 容器内监听地址需为 `0.0.0.0`（`server.host`）才能被端口映射访问（当前 `docker-compose.yml` 未配置该挂载）。
 
-## 4. 环境变量与启动参数（重要事实）
+## 4. 环境变量与启动参数（2026-11-15 已废除）
 
-`entrypoint.sh` 当前内容：
+历史上的 `entrypoint.sh` 曾向 `main.py` 传 `--level/--mode/--url` 参数、`.env` 提供 `LEVEL/MODE/URL` 变量，但 `main.py` 从未实现参数解析，全部无效（原知识库已知问题 #2）。
 
-```sh
-#!/bin/sh
-python3 main.py --level "${LEVEL:-lossless}" --mode "${MODE:-api}" --url "${URL:-''}"
-```
-
-`.env` 当前内容：
-
-```text
-LEVEL=lossless
-MODE=api
-URL=http://127.0.0.1:5000
-```
-
-**经代码实证：`main.py` 不解析任何命令行参数（无 argparse），Flask 启动配置硬编码于 `APIConfig`，因此 `--level/--mode/--url` 三个参数与 `.env` 中的 `LEVEL/MODE/URL` 当前全部无效**，仅 `ports` 端口映射有效（见知识库已知问题 #2）。服务行为无法通过环境变量调整；调整端口只能改 `docker-compose.yml` 的端口映射或修改 `main.APIConfig` 源码。
-
-`MODE`、`URL` 的原始设计意图不明（疑似历史双模式遗留），已登记知识库待确认事项。
+入口统一后已彻底移除：`entrypoint.sh` 现仅做配置引导后调用 `python3 start.py`，`.env` 文件与 compose 的 `env_file` 已删除。**服务行为一律通过 `config.toml` 调整**；容器场景调整端口仍可改 `docker-compose.yml` 的 `ports` 端口映射。
 
 ## 5. 日志
 

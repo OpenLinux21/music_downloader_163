@@ -12,7 +12,7 @@
 | 本仓库远程 | `git@github.com:OpenLinux21/music_downloader_163.git` |
 | 默认分支 | `main`（历史开发分支）；`develop` 为日常开发基准分支（2026-11-15 由用户确认后自 main 创建） |
 | 运行版本 | Python 3.12（本机 `.venv` 实测 3.12.16；Docker `python:3.12-alpine3.23`） |
-| 启动方式 | `python main.py`（无命令行参数解析） |
+| 启动方式 | `python start.py`（统一启动入口：依赖/配置文件/配置项/端口四项自检通过后才启动服务） |
 | 配置文件 | `config.toml`（唯一配置来源，Git 不跟踪）+ 提交模板 `config.example.toml`；读取模块 `config_loader.py` |
 | 数据库 | 无（仅文件存储，见 `docs/architecture.md` 第 6 节） |
 | 测试框架 | 无；`tests/` 下有断言式自检脚本（直接运行）；标准验证方式见 `docs/doc-maintenance.md` 第 3 节 |
@@ -59,6 +59,7 @@
 21. **配置加载行为**（`config_loader.py`）：`load_config()` 严格读取（文件缺失抛 `FileNotFoundError`、非法 TOML 抛 `tomllib.TOMLDecodeError`）；`get_config()` 在文件缺失时回落内置默认值并向 stderr 告警，解析错误不吞直接抛出；所有读取无内存缓存，修改配置即时生效。内置默认值：host `127.0.0.1`、port `5000`、`max_size_mb` 8192（MB）、`multi_thread` false、`speed_limit_kb` 0（KB/s，0 不限速）、限速 10 次/分钟 + 25 次/小时。`main.py` 在模块导入时把 `server.host`/`server.port` 接线到 `APIConfig`。
 22. **Cookie 写回与备份**（`config_loader.save_default_cookie` / `qr_login.py`）：写回采用文本替换只改动 `default_cookie` 一行（值经 `json.dumps` 编码，转义规则与 TOML 基本字符串兼容），缺键时插入 `[server]` 节头之后、缺节时文件末尾追加、文件缺失时自动创建最小配置；`qr_login.py` 覆盖/清除前把旧 Cookie 备份为项目根 `cookie.backup.<suffix>.<时间戳>.txt`（已 gitignore），`logout` 通过写空串清除而非删除文件。
 23. **统一日志系统**（`logger.py`，2026-11-15 落地）：GIN 风格格式 `[组件] YYYY/MM/DD - hh:mm:ss | 状态码 | 微秒耗时(3 位小数) | IP | 接口 [| 消息]`；请求行状态码按区间 ANSI 着色（2xx 绿/3xx 青/4xx 黄/5xx 红），事件按级别映射 OK/WARN/ERROR；控制台 handler 着色、`logs/service.log` handler（5MB 轮转 ×3）不着色；请求行由 `after_request` 输出（`before_request` 仅存起始时间），每请求恰好一条；Werkzeug 自带请求日志被压到 ERROR；组件含 `SERVER`（级别读 `config.log_level`）与 `DOWNLOADER`（库内事件，CLI 交互仍为 print）；日志只记录元信息不记录请求体。
+24. **启动自检流程**（`start.py`，2026-11-15 落地）：启动前依次检查 ①依赖安装（`importlib.util.find_spec` 逐个探测 flask/requests/aiohttp/aiofiles/cryptography/qrcode）②配置文件存在且 `tomllib` 可解析（严格读取）③配置项合法性（类型与取值范围，含每小时限速 ≥ 每分钟限速的跨项语义校验；`load_config` 已合并默认值，缺键回落默认）④端口占用（`socket` 试绑定，存在微小 TOCTOU 窗口，仅作预警）；每项结果逐行输出（`[启动检查] 名称 ：通过/失败（原因）`），任一失败以退出码 1 终止且不导入 `main`；全部通过后 `import main` 初始化并 `app.run(threaded=True)`。
 
 ## 4. 外部接口事实（上游依赖）
 
@@ -82,7 +83,7 @@
 | # | 问题 | 位置 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
 | 1 | `qr_login.py` 与 `music_api.py` 接口不匹配：`QRLoginClient.interactive_login()` 期望 `create_qr_login()` 返回含 `success`/`qr_key` 的字典、`check_qr_login()` 返回含 `success`/`status` 的字典，但现行实现分别返回 `Optional[str]` 和 `Tuple[int, dict]`，访问 `.get()` 会抛 `AttributeError`，`login` 命令实际不可用 | `qr_login.py` 的 `interactive_login()`；`music_api.py` 的 `QRLoginManager` | CLI 登录不可用；`music_api.qr_login()` 可正常使用 | 修复时需同步 `docs/modules/netease-api.md` |
-| 2 | `entrypoint.sh` 向 `main.py` 传 `--level/--mode/--url` 参数，但 `main.py` 无 argparse，参数被忽略；`.env` 中 `LEVEL/MODE/URL` 均无效 | `entrypoint.sh`、`.env`、`main.py` | 容器内无法通过环境变量调整音质/模式 | 详见 `docs/deployment.md` |
+| 2 | ~~`entrypoint.sh` 向 `main.py` 传 `--level/--mode/--url` 参数，但 `main.py` 无 argparse，参数被忽略；`.env` 中 `LEVEL/MODE/URL` 均无效~~ **已修复（2026-11-15）**：`entrypoint.sh` 改为生成默认配置后调用 `python3 start.py`，无效参数与 `.env` 文件已删除 | `entrypoint.sh`、`.env`（已删）、`start.py` | （已消除无效配置通道） | 已同步 `docs/deployment.md` |
 | 3 | `/download` 路由的缓存命中检查文件名为 `歌名 [音质].扩展名`，与下载器实际保存名 `歌手 - 歌名.扩展名` 不一致，检查基本不生效，导致重复下载 | `main.py` 的 `download_music_api()` vs `music_downloader.py` 的 `_build_file_path()` | 同一歌曲重复下载时浪费带宽 | 修复时需同步 `docs/modules/service.md` |
 | 4 | `/api/info` 返回的 `supported_qualities` 缺少 `dolby`，与 `/song`、`/download` 的校验列表（8 项）不一致 | `main.py` 的 `api_info()` | 信息展示不完整 | 修复时需同步 `docs/api.md` |
 | 5 | `/download` 链路重复调用上游：`main.py` 先调 `name_v1`+`url_v1`，随后 `MusicDownloader.get_music_info()` 内部再调一次 URL、详情、歌词接口 | `main.py`、`music_downloader.py` 的 `get_music_info()` | 每次下载产生约 5 次上游请求 | 修复时需同步 `docs/data-flow.md` |
@@ -97,7 +98,7 @@
 | # | 事项 | 状态 |
 | --- | --- | --- |
 | 1 | `cookie.txt` 中凭据的性质 | **已确认关闭**：用户明确说明该文件内容为无用的示例凭据，非真实账号 |
-| 2 | `.env` 中 `MODE=api`、`URL=http://127.0.0.1:5000` 的原始设计意图（疑似历史 GUI/API 双模式遗留） | 待确认：作者意图未知，仅确认当前代码不读取 |
+| 2 | `.env` 中 `MODE=api`、`URL=http://127.0.0.1:5000` 的原始设计意图（疑似历史 GUI/API 双模式遗留） | **已确认关闭（2026-11-15）**：随入口统一任务，`.env` 及无效参数已整体废除（用户确认的 Docker 同步方案），原始意图不再需要追溯 |
 | 3 | Git 历史中 commit `ba92e46 "3"` 的实际内容意图 | 待确认：提交信息无含义，未影响现状理解 |
 | 4 | 上游接口对非会员/失效 Cookie 的具体返回行为 | 待确认：需真实账号验证，文档仅记录代码层处理逻辑 |
 | 5 | `music_downloader.get_download_progress()` 在文件已存在但经过 ffmpeg 元数据重写（文件大小变化）时进度可能大于 100%（代码用 `min(progress, 100)` 截断显示，`completed` 判断以期望大小为准） | 已按代码记录，实际业务影响待确认 |
@@ -109,3 +110,4 @@
 | 2026-11-15 | 初版创建：完成全项目勘察，登记 10 项已知问题、5 项待确认事项 | AI Agent（文档体系建设任务） |
 | 2026-11-15 | 配置系统落地（feat/config-system）：新增 `config.toml`/`config.example.toml`/`config_loader.py`；Cookie 自 `cookie.txt` 迁入 `server.default_cookie` 并废弃 `cookie.txt`（`git rm` + .gitignore/.dockerignore 排除）；`main.py` 绑定地址/端口接入配置；`qr_login.py` Cookie 存取改走 config.toml；实证事实 2 改写，新增事实 21/22；新增自检脚本 `tests/test_config_system.py` | AI Agent |
 | 2026-11-15 | 统一日志系统落地（feat/logging-system）：新增 `logger.py`（GIN 风格，控制台彩色 + `logs/service.log` 5MB 轮转），废除 music_api.log 双写；请求行由 after_request 单点输出；DOWNLOADER 组件接入（已知问题 #6 修复）；实证事实 1 改写、新增事实 23；新增自检脚本 `tests/test_logging_system.py` | AI Agent |
+| 2026-11-15 | 统一启动入口落地（feat/start-entry）：新增 `start.py`（四项自检逐行输出）；`main.py` 移除启动逻辑；`entrypoint.sh` 改调 start.py，删除 `.env` 与无效参数（已知问题 #2 修复、待确认 #2 关闭）；AGENTS.md 第 1 节运行入口经用户授权修订；新增事实 24；新增自检脚本 `tests/test_start_checks.py`（含真实启动端到端） | AI Agent |

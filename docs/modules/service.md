@@ -5,10 +5,10 @@
 
 ## 1. 模块职责
 
-- 定义 Flask 应用与全部 HTTP 路由（服务唯一入口与唯一路由层）；
+- 定义 Flask 应用与全部 HTTP 路由（唯一路由层；服务启动入口为 `start.py`）；
 - 参数校验、ID/链接解析、上游调用编排、响应格式统一；
-- 日志初始化（控制台 + `music_api.log` 文件）与 CORS 注入；
-- 启动开发服务器（`app.run`，多线程）。
+- 初始化 `SERVER` 统一日志器（GIN 风格，见 `logger.py`）与 CORS 注入；
+- 不再包含启动逻辑（原 `start_api_server()` 已随入口统一移入 `start.py`）。
 
 ## 2. 配置类 `APIConfig`（dataclass）
 
@@ -85,13 +85,13 @@
 5. 否则调用 `downloader.download_music_file(music_id, quality)`（内部再次请求上游并落盘、写元数据），并把 `file_path` 重指为下载器返回的真实路径；
 6. `format=json` 返回下载信息；`format=file` 用 `send_file(as_attachment=True)` 返回文件流，附 `X-Download-Message`、`X-Download-Filename`（`quote` 编码）响应头。
 
-## 7. 启动流程 `start_api_server()`
+## 7. 启动流程（`start.py`，统一启动入口）
 
-1. 打印启动横幅（服务地址、下载目录、日志级别、端点清单、音质列表——**横幅中的音质列表同样只有 7 项**）；
-2. `app.run(host, port, debug, threaded=True)`（Flask 开发服务器，多线程模式）；
-3. `KeyboardInterrupt` 优雅退出；其他异常记录日志并以 `sys.exit(1)` 退出。
+1. 依次执行四项启动检查并逐行输出结果：依赖安装 → 配置文件存在/可解析 → 配置项合法性 → 端口占用（socket 试绑定）；任一失败输出汇总后以退出码 1 终止；
+2. 全部通过后才 `import main` 初始化服务（避免带病初始化），并压制 Werkzeug 自带请求日志；
+3. 打印启动横幅（服务地址、下载目录、端点清单、音质列表），`app.run(host, port, debug=False, threaded=True)` 启动开发服务器；`KeyboardInterrupt` 优雅退出。
 
-模块以 `if __name__ == '__main__'` 保护，仅直接执行 `python main.py` 时启动；被导入（如测试）只完成应用与服务初始化。
+`main.py` 不含 `__main__` 入口，被导入（如测试）只完成应用与服务初始化。
 
 ## 8. 修改注意事项
 

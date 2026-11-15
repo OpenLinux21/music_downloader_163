@@ -161,7 +161,7 @@ finally：删除封面临时文件与残留 .tagging 文件
     → config_loader.get_default_cookie() 实时读取 config.toml（文件缺失/未配置返回空串，不抛异常）
     → parse_cookie_string：支持 ";" 或 "\n" 分隔，"k=v" 解析为字典
     → config.toml 存在但 TOML 解析失败时，get_default_cookie 会抛 TOMLDecodeError
-      （导入 main.py 阶段即失败，服务拒绝以错误配置启动）
+      （start.py 启动自检会先行拦截并逐行报告；若绕过 start.py 直接导入 main.py，该异常在导入阶段抛出，服务拒绝以错误配置启动）
   HTTPClient 发 eapi 请求时：DEFAULT_COOKIES{os=pc, deviceId=pyncm!...} 先入，
   用户 Cookie 后合并覆盖（用户值优先）
 ```
