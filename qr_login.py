@@ -69,7 +69,9 @@ class QRLoginClient:
         if not cookie:
             return None
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = Path(f"cookie.backup.{suffix}.{ts}.txt")
+        # 备份跟随配置文件所在目录：默认 config.toml 在项目根（行为不变），
+        # 测试的临时配置则备份到临时目录，避免污染项目根
+        backup_path = self.config_file.parent / f"cookie.backup.{suffix}.{ts}.txt"
         try:
             backup_path.write_text(cookie + "\n", encoding="utf-8")
             return backup_path
