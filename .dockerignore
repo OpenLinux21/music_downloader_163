@@ -1,3 +1,10 @@
 LICENSE
 README.md
 .gitignore
+
+# 凭据与本地配置，禁止进入镜像层
+config.toml
+cookie.txt
+cookie.txt.backup.*
+cookie.txt.logout.*
+cookie.backup.*.txt

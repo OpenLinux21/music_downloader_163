@@ -10,3 +10,12 @@ __pycache__
 *.pyd
 
 music_api.log
+
+# 本地配置（含服务器默认 Cookie 等凭据，禁止提交）
+config.toml
+
+# Cookie 备份（qr_login.py 覆盖/清除 Cookie 前生成）
+cookie.txt
+cookie.txt.backup.*
+cookie.txt.logout.*
+cookie.backup.*.txt

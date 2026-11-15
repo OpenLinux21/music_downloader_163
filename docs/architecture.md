@@ -17,7 +17,10 @@ Netease_url/
 ├── main.py                 # Web 服务层：Flask 应用、全部 HTTP 路由、启动入口（唯一入口）
 ├── music_api.py            # 网易云 API 封装：eapi 加密、HTTP 客户端、二维码登录、Cookie 工具
 ├── music_downloader.py     # 音乐下载器：同步/异步/批量下载、ffmpeg 元数据写入、CLI 入口
-├── qr_login.py             # 二维码登录 CLI 工具：Cookie 文件读写/备份/校验（与 music_api 存在接口不匹配，见知识库）
+├── qr_login.py             # 二维码登录 CLI 工具：Cookie 读写/备份/校验（与 music_api 存在接口不匹配，见知识库）
+├── config_loader.py        # 配置读取模块：tomllib 解析 config.toml、默认值合并、Cookie 读写
+├── config.example.toml     # 配置模板（提交 Git，Cookie 留空）
+├── config.toml             # 本地配置（含服务器默认 Cookie，已被 .gitignore 排除，禁止提交）
 ├── templates/
 │   └── index.html          # 唯一前端页面（jQuery + Bootstrap + APlayer，单文件应用）
 ├── requirements.txt        # Python 依赖（26 个包，全部固定版本）
@@ -25,7 +28,6 @@ Netease_url/
 ├── docker-compose.yml      # 单服务编排（引用 .env）
 ├── entrypoint.sh           # 容器启动脚本（参数实际无效，详见 docs/deployment.md）
 ├── .env                    # 环境变量（LEVEL/MODE/URL，当前均不被程序读取）
-├── cookie.txt              # 网易云 Cookie（Git 已跟踪；用户确认为无用的示例凭据）
 ├── README.md / 使用文档.md  # 面向使用者的说明（部分内容与代码存在出入，以本文档体系为准）
 ├── downloads/              # 下载产物目录（运行时生成，未被 .gitignore 覆盖）
 └── music_api.log           # 服务日志（运行时生成，已被 .gitignore 覆盖）
@@ -42,6 +44,7 @@ Netease_url/
 | 二维码 | qrcode 8.2（终端 ASCII 二维码） | `music_api.py` 的 `QRLoginManager.create_qr_login()` |
 | 音频处理 | ffmpeg（系统二进制，非 Python 包；Docker 内通过 `apk add ffmpeg` 安装） | `Dockerfile`、`music_downloader.py` |
 | 前端 | jQuery 3.7.1、Bootstrap 5.1.3、APlayer 1.10.1（均加载自 `mirrors.sustech.edu.cn` CDN） | `templates/index.html` |
+| 配置 | TOML，标准库 `tomllib` 解析；`config.toml` 为唯一配置来源（缺省回落内置默认值） | `config_loader.py` |
 
 依赖全部在 `requirements.txt` 中固定版本，无数据库驱动、无 ORM、无任务队列、无测试框架、无 CI 配置。
 
@@ -86,7 +89,7 @@ Netease_url/
 ## 5. 并发与运行模型
 
 - Web 层：Flask 开发服务器 `app.run(threaded=True)`，每请求一个线程；无生产级 WSGI/进程管理。
-- Cookie 读取：每个请求处理过程中调用 `load_cookies()` 重新读 `cookie.txt` 文件，无缓存，修改 Cookie 文件即时生效。
+- Cookie 读取：每个请求处理过程中调用 `load_cookies()` 实时读取 `config.toml` 的 `server.default_cookie` 并解析为字典，无缓存，修改配置即时生效。
 - 下载层：同步下载使用 `requests` 流式写入；异步/批量下载使用 `asyncio.Semaphore(3)` 限制并发（`MusicDownloader(max_concurrent=3)`）。
 - 元数据写入：调用外部 `ffmpeg` 进程（`subprocess.run`，超时 120 秒），ffmpeg 路径在启动时检测一次并在每次写入前懒加载重试（支持服务运行中途安装 ffmpeg）。
 
@@ -96,8 +99,8 @@ Netease_url/
 
 | 文件/目录 | 用途 | 产生方式 |
 | --- | --- | --- |
-| `cookie.txt` | 网易云账号 Cookie（`k=v; k=v` 格式） | 人工填写或 `qr_login.py` 登录写入 |
-| `cookie.txt.backup.*` / `cookie.txt.logout.*` | Cookie 修改前的备份 | `qr_login.py` 的 `_backup_cookie()` |
+| `config.toml` | 服务配置（绑定地址/端口/缓存上限/下载开关/限速）与服务器默认 Cookie（`server.default_cookie`） | 从 `config.example.toml` 复制后人工填写，或 `qr_login.py` 登录写入；Git 不跟踪 |
+| `cookie.backup.<suffix>.<时间戳>.txt` | Cookie 覆盖/清除前的备份 | `qr_login.py` 的 `_backup_cookie()` |
 | `downloads/` | 下载的音乐文件与 ffmpeg 封面临时文件 | 服务运行时生成 |
 | `music_api.log` | Web 服务日志（控制台 + 文件双写） | `main.py` 的 `_setup_logger()` |
 

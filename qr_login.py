@@ -3,24 +3,23 @@
 提供网易云音乐二维码登录功能，包括：
 - 二维码生成和显示
 - 登录状态检查
-- Cookie 获取和保存（直接读写 cookie.txt）
+- Cookie 获取和保存（读写 config.toml 的服务器默认 Cookie）
 - 用户友好的交互界面
 """
 
-import os
 import sys
 import time
-import shutil
 import logging
 import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
 try:
-    from music_api import QRLoginManager, APIException, load_cookies
+    from music_api import QRLoginManager, APIException, parse_cookie_string
+    from config_loader import get_default_cookie, save_default_cookie
 except ImportError as e:
     print(f"导入模块失败: {e}")
-    print("请确保 music_api.py 文件存在且可用")
+    print("请确保 music_api.py 与 config_loader.py 文件存在且可用")
     sys.exit(1)
 
 
@@ -31,12 +30,12 @@ IMPORTANT_COOKIE_KEYS = ("MUSIC_U", "__csrf", "NMTID")
 class QRLoginClient:
     """二维码登录客户端"""
 
-    def __init__(self, cookie_file: str = "cookie.txt"):
+    def __init__(self, config_file: str = "config.toml"):
         """
         Args:
-            cookie_file: Cookie 保存文件路径
+            config_file: Cookie 所在的配置文件路径（server.default_cookie）
         """
-        self.cookie_file = Path(cookie_file)
+        self.config_file = Path(config_file)
         self.qr_manager = QRLoginManager()
         self.logger = logging.getLogger(__name__)
 
@@ -47,14 +46,12 @@ class QRLoginClient:
             self.logger.addHandler(handler)
             self.logger.setLevel(logging.INFO)
 
-    # ----------- Cookie 文件直接操作 -----------
+    # ----------- Cookie 存取（经 config.toml） -----------
 
     def _read_cookie(self) -> str:
-        if not self.cookie_file.exists():
-            return ""
         try:
-            return self.cookie_file.read_text(encoding="utf-8").strip()
-        except OSError as e:
+            return get_default_cookie(self.config_file)
+        except Exception as e:
             self.logger.error(f"读取 Cookie 失败: {e}")
             return ""
 
@@ -63,57 +60,46 @@ class QRLoginClient:
             self.logger.error("Cookie 内容不能为空")
             return False
         try:
-            self.cookie_file.write_text(cookie.strip() + "\n", encoding="utf-8")
-            return True
-        except OSError as e:
+            return save_default_cookie(cookie.strip(), self.config_file)
+        except Exception as e:
             self.logger.error(f"写入 Cookie 失败: {e}")
             return False
 
     def _backup_cookie(self, suffix: str = "backup") -> Optional[Path]:
-        if not self.cookie_file.exists():
+        cookie = self._read_cookie()
+        if not cookie:
             return None
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = self.cookie_file.with_name(
-            f"{self.cookie_file.stem}.{suffix}.{ts}{self.cookie_file.suffix}"
-        )
+        backup_path = Path(f"cookie.backup.{suffix}.{ts}.txt")
         try:
-            shutil.copy2(self.cookie_file, backup_path)
+            backup_path.write_text(cookie + "\n", encoding="utf-8")
             return backup_path
         except OSError as e:
             self.logger.warning(f"备份 Cookie 失败: {e}")
             return None
 
     def _clear_cookie(self) -> bool:
-        if not self.cookie_file.exists():
-            return True
         try:
-            self.cookie_file.unlink()
-            return True
-        except OSError as e:
+            return save_default_cookie("", self.config_file)
+        except Exception as e:
             self.logger.error(f"清除 Cookie 失败: {e}")
             return False
 
     def _is_cookie_valid(self) -> bool:
-        cookies = load_cookies(str(self.cookie_file))
+        cookies = parse_cookie_string(self._read_cookie())
         return any(k in cookies for k in IMPORTANT_COOKIE_KEYS)
 
     def _get_cookie_info(self) -> dict:
-        cookies = load_cookies(str(self.cookie_file))
+        cookies = parse_cookie_string(self._read_cookie())
         present = [k for k in IMPORTANT_COOKIE_KEYS if k in cookies]
         info = {
-            "file_path": str(self.cookie_file.absolute()),
-            "file_exists": self.cookie_file.exists(),
+            "config_file": str(self.config_file.absolute()),
+            "config_exists": self.config_file.exists(),
             "cookie_count": len(cookies),
             "is_valid": bool(present),
             "important_cookies_present": present,
             "missing_important_cookies": [k for k in IMPORTANT_COOKIE_KEYS if k not in cookies],
         }
-        if self.cookie_file.exists():
-            try:
-                mtime = self.cookie_file.stat().st_mtime
-                info["last_modified"] = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
-            except OSError:
-                pass
         return info
 
     # ----------- 业务方法 -----------
@@ -209,9 +195,9 @@ class QRLoginClient:
             return False, f"登录过程中发生未知错误: {e}"
 
     def save_cookie(self, cookie: str) -> bool:
-        """保存 Cookie 到文件"""
+        """保存 Cookie 到配置文件"""
         try:
-            if self.cookie_file.exists():
+            if self._read_cookie():
                 backup = self._backup_cookie()
                 if backup:
                     self.logger.info(f"已备份现有 Cookie 到: {backup}")
@@ -234,12 +220,10 @@ class QRLoginClient:
         try:
             info = self._get_cookie_info()
             print("\n=== 登录状态信息 ===")
-            print(f"Cookie 文件: {info['file_path']}")
-            print(f"文件存在: {'是' if info['file_exists'] else '否'}")
+            print(f"配置文件: {info['config_file']}")
+            print(f"配置文件存在: {'是' if info['config_exists'] else '否'}")
             print(f"Cookie 数量: {info['cookie_count']}")
             print(f"登录状态: {'有效' if info['is_valid'] else '无效'}")
-            if info.get("last_modified"):
-                print(f"最后更新: {info['last_modified']}")
             if info["is_valid"]:
                 present = info.get("important_cookies_present", [])
                 print(f"重要 Cookie: {', '.join(present)}")
@@ -253,7 +237,7 @@ class QRLoginClient:
     def logout(self) -> bool:
         """登出（清除 Cookie）"""
         try:
-            if self.cookie_file.exists():
+            if self._read_cookie():
                 backup = self._backup_cookie("logout")
                 if backup:
                     print(f"Cookie 已备份到: {backup}")

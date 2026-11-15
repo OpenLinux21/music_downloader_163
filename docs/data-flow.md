@@ -25,7 +25,7 @@ _safe_get_request_data()：统一取参
 路由内参数校验（必填项、音质白名单、类型白名单等，失败即返回 APIResponse.error）
    │
    ▼
-_get_cookies() → load_cookies()：每次请求都重新读取 cookie.txt 为字典
+_get_cookies() → load_cookies()：每次请求都实时读取 config.toml 的 server.default_cookie 并解析为字典
    │
    ▼
 调用 music_api 向上游发起请求（超时 30s，业务码非 200 抛 APIException）
@@ -151,16 +151,16 @@ finally：删除封面临时文件与残留 .tagging 文件
 
 ```text
 【写入侧】
-  人工编辑 cookie.txt（"k1=v1; k2=v2" 或每行一对）
-  或 python music_api.py → qr_login()：终端二维码 → 轮询 801/802/803
-      → 803 时从 Set-Cookie 提取 MUSIC_U → 返回 "MUSIC_U=xxx;os=pc;appver=8.9.70;"
-  或 python qr_login.py login → save_cookie()：备份旧文件（cookie.txt.backup.时间戳）
-      → 覆盖写入 → 校验含 MUSIC_U/__csrf/NMTID 任一关键字段
+  人工编辑 config.toml 的 server.default_cookie（"k1=v1; k2=v2" 或每行一对）
+  或 python qr_login.py login → save_cookie()：备份旧值（cookie.backup.backup.时间戳.txt）
+      → 经 config_loader.save_default_cookie 写回 config.toml → 校验含 MUSIC_U/__csrf/NMTID 任一关键字段
 
 【读取侧（每请求执行，无缓存）】
-  load_cookies("cookie.txt")
-    → 文件不存在/读取失败 → {}（不抛异常）
+  load_cookies()
+    → config_loader.get_default_cookie() 实时读取 config.toml（文件缺失/未配置返回空串，不抛异常）
     → parse_cookie_string：支持 ";" 或 "\n" 分隔，"k=v" 解析为字典
+    → config.toml 存在但 TOML 解析失败时，get_default_cookie 会抛 TOMLDecodeError
+      （导入 main.py 阶段即失败，服务拒绝以错误配置启动）
   HTTPClient 发 eapi 请求时：DEFAULT_COOKIES{os=pc, deviceId=pyncm!...} 先入，
   用户 Cookie 后合并覆盖（用户值优先）
 ```
@@ -169,8 +169,8 @@ finally：删除封面临时文件与残留 .tagging 文件
 
 | 路径 | 写入者 | 时机 | 清理策略 |
 | --- | --- | --- | --- |
-| `cookie.txt` | 人工 / `qr_login.py` | 登录或手动更新 | `logout` 命令删除（先备份 `.logout.时间戳`） |
-| `cookie.txt.backup.*` / `.logout.*` | `qr_login.py` | 覆盖/清除 Cookie 前 | 无自动清理 |
+| `config.toml` | 人工 / `qr_login.py` / 服务启动读取 | 部署时从模板复制并填写 | Git 不跟踪（.gitignore、.dockerignore 均已排除） |
+| `cookie.backup.*.txt` | `qr_login.py` | 覆盖/清除 Cookie 前 | 无自动清理，Git 不跟踪 |
 | `downloads/歌手 - 歌名.扩展名` | `MusicDownloader` | 每次下载 | 无自动清理，同名跳过（按下载器命名） |
 | `downloads/*.tagging.*` | ffmpeg 临时输出 | 元数据写入期间 | 成功后 move、失败后 finally 删除 |
 | `downloads/tmp*/***.jpg`（mkstemp） | 封面下载 | 元数据写入期间 | finally 删除 |

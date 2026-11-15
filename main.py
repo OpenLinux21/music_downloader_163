@@ -26,6 +26,7 @@ try:
         load_cookies,
     )
     from music_downloader import MusicDownloader, DownloadException, AudioFormat
+    from config_loader import get_config
 except ImportError as e:
     print(f"导入模块失败: {e}")
     print("请确保所有依赖模块存在且可用")
@@ -116,14 +117,14 @@ class MusicAPIService:
         return logger
     
     def _get_cookies(self) -> Dict[str, str]:
-        """直接从 cookie.txt 读取并解析为 dict"""
+        """从 config.toml 读取服务器默认 Cookie 并解析为 dict"""
         try:
             cookies = load_cookies()
             if not cookies:
-                self.logger.warning("cookie.txt 为空或不存在，部分接口（VIP 音质）将不可用")
+                self.logger.warning("默认 Cookie 未配置或为空，部分接口（VIP 音质）将不可用")
             return cookies
         except Exception as e:
-            self.logger.error(f"读取 cookie.txt 异常: {e}")
+            self.logger.error(f"读取默认 Cookie 异常: {e}")
             return {}
     
     def _extract_music_id(self, id_or_url: str) -> str:
@@ -200,8 +201,12 @@ class MusicAPIService:
             return {}
 
 
-# 创建Flask应用和服务实例
-config = APIConfig()
+# 创建Flask应用和服务实例（绑定地址/端口读自 config.toml）
+_cfg = get_config()
+config = APIConfig(
+    host=str(_cfg["server"]["host"]),
+    port=int(_cfg["server"]["port"]),
+)
 app = Flask(__name__)
 api_service = MusicAPIService(config)
 
@@ -258,7 +263,7 @@ def index() -> str:
 def health_check():
     """健康检查API"""
     try:
-        # 检查 Cookie 状态：直接读 cookie.txt
+        # 检查 Cookie 状态：读取 config.toml 中的默认 Cookie
         cookies = load_cookies()
         cookie_status = 'valid' if cookies else 'invalid'
 

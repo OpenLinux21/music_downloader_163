@@ -14,8 +14,8 @@
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `host` | `0.0.0.0` | 监听地址 |
-| `port` | `5000` | 监听端口 |
+| `host` | `127.0.0.1`（实例化时读自 `config.toml` 的 `server.host`） | 监听地址 |
+| `port` | `5000`（实例化时读自 `config.toml` 的 `server.port`） | 监听端口 |
 | `debug` | `False` | Flask 调试模式 |
 | `downloads_dir` | `downloads` | 下载目录（相对项目根） |
 | `max_file_size` | 500MB | 仅在 `/api/info` 中展示，**无实际限制逻辑** |
@@ -23,7 +23,7 @@
 | `log_level` | `INFO` | 日志级别 |
 | `cors_origins` | `*` | CORS 允许来源 |
 
-注意：`max_file_size` 与 `request_timeout` 是展示性配置，代码中无对应执行逻辑，调整它们不会改变行为。
+注意：`max_file_size` 与 `request_timeout` 是展示性配置，代码中无对应执行逻辑，调整它们不会改变行为。`host`/`port` 的 dataclass 默认值仅在 `config.toml` 缺失对应键时生效；正常运行取值来自 `config.toml`。
 
 ## 3. 响应工具 `APIResponse`
 
@@ -41,7 +41,7 @@
 | 方法 | 行为要点 |
 | --- | --- |
 | `_setup_logger` | logger 名 `music_api`；控制台 + 文件双 handler；文件为 `music_api.log`；仅首次添加 handler |
-| `_get_cookies` | 调 `load_cookies()` 每请求重读 `cookie.txt`；空文件打 warning 返回 `{}`；异常返回 `{}` 不中断 |
+| `_get_cookies` | 调 `load_cookies()` 每请求实时读 `config.toml` 的 `server.default_cookie`；未配置打 warning 返回 `{}`；异常返回 `{}` 不中断 |
 | `_extract_music_id` | 短链 `163cn.tv` 展开（不跟随重定向取 Location）→ `music.163.com` 提取 `id=` → 否则原样 strip；任何异常返回原串 |
 | `_format_file_size` | B/KB/MB/GB/TB 自动换算，两位小数 |
 | `_get_quality_display_name` | 8 种音质的中文名映射，未知名返回 `未知音质(xxx)` |
