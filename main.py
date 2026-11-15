@@ -16,7 +16,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,17 +28,23 @@ from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 try:
-    from music_api import (
-        NeteaseAPI, APIException,
-        url_v1, name_v1, lyric_v1, search_music,
-        playlist_detail, album_detail,
-        load_cookies, parse_cookie_string,
-    )
-    from music_downloader import MusicDownloader, DownloadException
-    from storage_manager import StorageManager
-    from session_manager import SessionManager, COOKIE_NAME, SESSION_TTL_SECONDS
     from config_loader import get_config
     from logger import get_logger, log_request
+    from music_api import (
+        APIException,
+        NeteaseAPI,
+        album_detail,
+        load_cookies,
+        lyric_v1,
+        name_v1,
+        parse_cookie_string,
+        playlist_detail,
+        search_music,
+        url_v1,
+    )
+    from music_downloader import DownloadException, MusicDownloader
+    from session_manager import COOKIE_NAME, SESSION_TTL_SECONDS, SessionManager
+    from storage_manager import StorageManager
 except ImportError as e:
     print(f"导入模块失败: {e}")
     print("请确保所有依赖模块存在且可用")
@@ -69,7 +75,7 @@ class APIResponse:
     @staticmethod
     def success(data: Any = None, message: str = 'success', status_code: int = 200) -> JSONResponse:
         """成功响应"""
-        body: Dict[str, Any] = {'status': status_code, 'success': True, 'message': message}
+        body: dict[str, Any] = {'status': status_code, 'success': True, 'message': message}
         if data is not None:
             body['data'] = data
         return JSONResponse(content=body, status_code=status_code)
@@ -77,7 +83,7 @@ class APIResponse:
     @staticmethod
     def error(message: str, status_code: int = 400, error_code: str = None) -> JSONResponse:
         """错误响应"""
-        body: Dict[str, Any] = {'status': status_code, 'success': False, 'message': message}
+        body: dict[str, Any] = {'status': status_code, 'success': False, 'message': message}
         if error_code:
             body['error_code'] = error_code
         return JSONResponse(content=body, status_code=status_code)
@@ -108,7 +114,7 @@ class MusicAPIService:
         self.logger.info(f"音乐API服务初始化完成，存储目录: {self.storage_path.resolve()}")
         self.storage.start_cleanup_daemon()
 
-    def _get_cookies(self) -> Dict[str, str]:
+    def _get_cookies(self) -> dict[str, str]:
         """从 config.toml 读取服务器默认 Cookie 并解析为 dict"""
         try:
             cookies = load_cookies()
@@ -170,7 +176,7 @@ class MusicAPIService:
         }
         return quality_names.get(quality, f"未知音质({quality})")
 
-    def _validate_request_params(self, required_params: Dict[str, Any]) -> Optional[Tuple[str, int]]:
+    def _validate_request_params(self, required_params: dict[str, Any]) -> tuple[str, int] | None:
         """验证请求参数（返回错误文案与状态码，无错误返回 None）"""
         for param_name, param_value in required_params.items():
             if not param_value:
@@ -251,9 +257,9 @@ async def log_request_line(request: Request, call_next):
     return response
 
 
-async def get_request_data(request: Request) -> Dict[str, Any]:
+async def get_request_data(request: Request) -> dict[str, Any]:
     """统一取参：GET 取 query；POST 合并表单与 JSON（JSON 同名键覆盖表单）"""
-    data: Dict[str, Any] = dict(request.query_params)
+    data: dict[str, Any] = dict(request.query_params)
     if request.method == "POST":
         try:
             form = await request.form()
@@ -329,12 +335,11 @@ def health_check():
 @app.post('/search')
 @limiter.limit(RATE_MINUTE)
 @limiter.limit(RATE_HOUR)
-def search_music_api(request: Request, data: Dict[str, Any] = Depends(get_request_data)):
+def search_music_api(request: Request, data: dict[str, Any] = Depends(get_request_data)):
     """搜索音乐API"""
     try:
         keyword = data.get('keyword') or data.get('keywords') or data.get('q')
         limit = int(data.get('limit', 30))
-        search_type = data.get('type', '1')  # 1-歌曲（上游硬编码）
 
         # 参数验证
         validation_error = api_service._validate_request_params({'keyword': keyword})
@@ -370,7 +375,7 @@ def search_music_api(request: Request, data: Dict[str, Any] = Depends(get_reques
 @app.post('/song')
 @limiter.limit(RATE_MINUTE)
 @limiter.limit(RATE_HOUR)
-def get_song_info(request: Request, data: Dict[str, Any] = Depends(get_request_data)):
+def get_song_info(request: Request, data: dict[str, Any] = Depends(get_request_data)):
     """获取歌曲信息API"""
     try:
         song_ids = data.get('ids') or data.get('id')
@@ -472,7 +477,7 @@ def get_song_info(request: Request, data: Dict[str, Any] = Depends(get_request_d
 @app.post('/playlist')
 @limiter.limit(RATE_MINUTE)
 @limiter.limit(RATE_HOUR)
-def get_playlist(request: Request, data: Dict[str, Any] = Depends(get_request_data)):
+def get_playlist(request: Request, data: dict[str, Any] = Depends(get_request_data)):
     """获取歌单详情API"""
     try:
         playlist_id = data.get('id')
@@ -500,7 +505,7 @@ def get_playlist(request: Request, data: Dict[str, Any] = Depends(get_request_da
 @app.post('/album')
 @limiter.limit(RATE_MINUTE)
 @limiter.limit(RATE_HOUR)
-def get_album(request: Request, data: Dict[str, Any] = Depends(get_request_data)):
+def get_album(request: Request, data: dict[str, Any] = Depends(get_request_data)):
     """获取专辑详情API"""
     try:
         album_id = data.get('id')
@@ -528,7 +533,7 @@ def get_album(request: Request, data: Dict[str, Any] = Depends(get_request_data)
 @app.post('/download')
 @limiter.limit(RATE_MINUTE)
 @limiter.limit(RATE_HOUR)
-def download_music_api(request: Request, data: Dict[str, Any] = Depends(get_request_data)):
+def download_music_api(request: Request, data: dict[str, Any] = Depends(get_request_data)):
     """下载音乐API
 
     下载链路统一委托下载器（内部一次性获取链接/详情/歌词，不再重复调用上游）；

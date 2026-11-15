@@ -1,4 +1,4 @@
-"""存储与缓存自检脚本（无测试框架，直接运行）
+"""存储与缓存自检（pytest 管理）
 
 覆盖范围（临时目录驱动，不发起任何上游请求）：
 1. StorageManager 初始化：目录与 root.db 表结构创建
@@ -12,19 +12,14 @@
    （音频由本地 ffmpeg 生成 1 秒静音 mp3，不消耗上游）
 9. /download 路由缓存命中分支：format=json 返回 cached=true 且访问量 +1
 
-运行方式：.venv/bin/python tests/test_storage_cache.py
+运行方式：python -m pytest tests/ -v
 """
 
 import shutil
 import sqlite3
 import subprocess
-import sys
-import tempfile
 import time
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 
 from storage_manager import StorageManager
 
@@ -45,7 +40,6 @@ def test_init(tmp: Path) -> None:
     with sqlite3.connect(sm.db_path) as conn:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"songs", "files"} <= tables
-    print("通过: storage 目录与 root.db 表结构初始化")
 
 
 def test_register_and_access(tmp: Path) -> None:
@@ -60,7 +54,6 @@ def test_register_and_access(tmp: Path) -> None:
     assert stats["visit_count"] == 2, f"访问量异常: {stats}"
     sm.record_access(99999)  # 未入库歌曲静默忽略
     assert sm.song_stats(99999) is None
-    print("通过: 歌曲登记、重复登记保留访问量、record_access 累加")
 
 
 def test_resolve_path(tmp: Path) -> None:
@@ -80,7 +73,6 @@ def test_resolve_path(tmp: Path) -> None:
     assert p3.name == "歌名_含_非法.exhigh.mp3", f"扩展名冲突未加音质段: {p3}"
     # 同音质再次解析保持幂等
     assert sm.resolve_audio_path(2, "standard", "歌名/含:非法", ".mp3") == p2
-    print("通过: 命名规则（默认歌名.ext，扩展名冲突加音质段）")
 
 
 def test_cache_queries(tmp: Path) -> None:
@@ -115,7 +107,6 @@ def test_cache_queries(tmp: Path) -> None:
     qualities = sm.cached_qualities(3)
     assert {q["quality"] for q in qualities} == {"standard"}
     assert any(q["path"].startswith("albums/") for q in qualities)
-    print("通过: 缓存命中判定（主存储/副本/文件缺失/无记录）与联查")
 
 
 def test_cleanup_expired(tmp: Path) -> None:
@@ -152,7 +143,6 @@ def test_cleanup_expired(tmp: Path) -> None:
     assert not (sm.albums_dir / "66" / "100").exists()
     assert sm.song_stats(100) is None
     assert sm.song_dir(101).exists() and sm.song_stats(101) is not None
-    print("通过: 到期清理（歌曲目录+专辑副本+DB 行）")
 
 
 def test_cleanup_evict(tmp: Path) -> None:
@@ -177,7 +167,6 @@ def test_cleanup_evict(tmp: Path) -> None:
     assert sm.song_stats(200) is not None      # 访问量最高者保留
     assert sm.song_stats(201) is None          # 访问量最低者先淘汰
     assert sm.song_stats(202) is None
-    print("通过: 超限淘汰（按访问量升序整歌淘汰至上限内）")
 
 
 def test_downloader_post_register(tmp: Path) -> None:
@@ -204,7 +193,6 @@ def test_downloader_post_register(tmp: Path) -> None:
     assert (copy_dir / target.name).is_file()
     assert (copy_dir / "lyric.lrc").is_file()
     assert sm.total_size() == target.stat().st_size * 2
-    print("通过: _post_register 登记/歌词落盘/元数据写入/专辑副本")
 
 
 def test_route_cache_hit(tmp: Path) -> None:
@@ -234,24 +222,3 @@ def test_route_cache_hit(tmp: Path) -> None:
     assert resp.status_code == 200 and data["success"], data
     assert data["data"]["cached"] is True and data["data"]["name"] == "缓存路由测试"
     assert sm.song_stats(song_id)["visit_count"] == before + 1
-    print("通过: /download 缓存命中分支（cached=true 且访问量 +1，未发起上游调用）")
-
-
-def main() -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="storagetest_"))
-    try:
-        test_init(tmp)
-        test_register_and_access(tmp)
-        test_resolve_path(tmp)
-        test_cache_queries(tmp)
-        test_cleanup_expired(tmp)
-        test_cleanup_evict(tmp)
-        test_downloader_post_register(tmp)
-        test_route_cache_hit(tmp)
-        print("\n全部自检通过 ✔")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-if __name__ == "__main__":
-    main()

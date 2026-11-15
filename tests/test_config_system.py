@@ -1,4 +1,4 @@
-"""配置系统自检脚本（无测试框架，直接运行）
+"""配置系统自检（pytest 管理）
 
 覆盖范围：
 1. config_loader 严格读取：文件缺失抛 FileNotFoundError、TOML 格式错误抛 TOMLDecodeError
@@ -10,22 +10,19 @@
 6. qr_login.QRLoginClient：读取/保存/备份/登出（作用于临时副本）
 7. main.py：绑定地址/端口读自 config.toml
 
-运行方式：.venv/bin/python tests/test_config_system.py
+运行方式：python -m pytest tests/ -v
 注意：涉及 Cookie 的测试只断言字段数量与回环一致性，不打印任何凭据内容。
 """
 
-import shutil
-import sys
 import tempfile
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
 import config_loader as cl
 from music_api import load_cookies
 from qr_login import QRLoginClient
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def _write(path: Path, text: str) -> Path:
@@ -46,7 +43,6 @@ def test_strict_load_errors(tmp: Path) -> None:
         raise AssertionError("非法 TOML 未抛 TOMLDecodeError")
     except tomllib.TOMLDecodeError:
         pass
-    print("通过: 严格读取错误分支（FileNotFoundError / TOMLDecodeError）")
 
 
 def test_defaults_and_real_config() -> None:
@@ -63,7 +59,6 @@ def test_defaults_and_real_config() -> None:
     missing = cl.get_config(Path(tempfile.mkdtemp()) / "nope.toml")
     assert missing["server"]["port"] == 5000
     assert cl.get_default_cookie(Path(tempfile.mkdtemp()) / "nope.toml") == ""
-    print("通过: 默认值合并与真实配置解析")
 
 
 def test_save_roundtrip(tmp: Path) -> None:
@@ -84,7 +79,6 @@ def test_save_roundtrip(tmp: Path) -> None:
     # 清空写
     assert cl.save_default_cookie("", cfg)
     assert cl.get_default_cookie(cfg) == ""
-    print("通过: save_default_cookie 写入/覆盖/清空回环")
 
 
 def test_save_insertion_cases(tmp: Path) -> None:
@@ -106,7 +100,6 @@ def test_save_insertion_cases(tmp: Path) -> None:
     cfg3 = tmp / "created.toml"
     assert cl.save_default_cookie("MUSIC_U=i", cfg3)
     assert cl.get_default_cookie(cfg3) == "MUSIC_U=i"
-    print("通过: 缺键插入 / 缺节追加 / 文件自动创建")
 
 
 def test_load_cookies_from_real_config() -> None:
@@ -114,7 +107,6 @@ def test_load_cookies_from_real_config() -> None:
     raw = cl.get_default_cookie()
     assert (len(cookies) > 0) == (len(raw.strip()) > 0)
     assert isinstance(cookies, dict)
-    print(f"通过: load_cookies() 接入 config.toml（字段数: {len(cookies)}）")
 
 
 def test_qr_login_client(tmp: Path) -> None:
@@ -143,14 +135,12 @@ def test_qr_login_client(tmp: Path) -> None:
 
     # 空 Cookie 拒绝写入
     assert not client._write_cookie("   ")
-    print("通过: QRLoginClient 读取/保存/备份/登出（临时副本）")
 
 
 def test_main_wiring() -> None:
     import main  # noqa: F401  导入即完成配置接线
     assert main.config.host == cl.get_config()["server"]["host"]
     assert main.config.port == cl.get_config()["server"]["port"]
-    print(f"通过: main.py 绑定配置接线（{main.config.host}:{main.config.port}）")
 
 
 def test_gitignore_effective() -> None:
@@ -161,24 +151,3 @@ def test_gitignore_effective() -> None:
     # 真实配置不得进入暂存区
     res = run(["git", "status", "--short"], cwd=ROOT, capture_output=True, text=True)
     assert "config.toml" not in res.stdout.replace("?? config.toml", ""), "config.toml 出现在暂存/跟踪区"
-    print("通过: .gitignore 覆盖 config.toml，未进入 Git 跟踪")
-
-
-def main() -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="cfgtest_"))
-    try:
-        test_strict_load_errors(tmp)
-        test_defaults_and_real_config()
-        test_save_roundtrip(tmp)
-        test_save_insertion_cases(tmp)
-        test_load_cookies_from_real_config()
-        test_qr_login_client(tmp)
-        test_main_wiring()
-        test_gitignore_effective()
-        print("\n全部自检通过 ✔")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-if __name__ == "__main__":
-    main()

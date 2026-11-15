@@ -1,4 +1,4 @@
-"""用户自有凭据自检脚本（无测试框架，直接运行）
+"""用户自有凭据自检（pytest 管理）
 
 覆盖范围：
 1. 缓存命中 + 带 user_cookie：直接复用缓存，凭据与上游均不被触达（打桩断言）
@@ -6,19 +6,17 @@
    不带 user_cookie 时传 None（回落 config 默认 Cookie）
 3. 零持久化断言：请求结束后，日志文件、root.db、sha256sum.db、storage 全部
    文件、config.toml 中均不存在凭据哨兵值
-4. 端到端（真实上游，用户已授权）：带哨兵 Cookie 请求未缓存音质（hires，
+4. 端到端（标记 upstream，默认跳过）：带哨兵 Cookie 请求未缓存音质（hires，
    预期上游拒绝）→ 复查第 3 条零残留；清理可能的脏缓存
 
-运行方式：.venv/bin/python tests/test_user_cookie.py
+运行方式：python -m pytest tests/ -v（须在项目根目录执行，零持久化检查依赖相对路径）
+端到端上游用例须用户授权后显式运行：python -m pytest -m upstream
+注意：涉及凭据的用例仅使用哨兵假值，不读取、不打印任何真实凭据。
 """
 
-import shutil
-import sys
-import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+import pytest
 
 SENTINEL = "SENTINEL_MUSIC_U=secret_value_12345; os=pc"
 PARSED = {"SENTINEL_MUSIC_U": "secret_value_12345", "os": "pc"}
@@ -50,7 +48,6 @@ def test_hit_ignores_cookie(tmp: Path) -> None:
         assert r.json()["data"]["cached"] is True
     finally:
         del dl.get_music_info  # 还原实例方法
-    print("通过: 缓存命中时凭据与上游均未被使用")
 
 
 def test_miss_passes_cookie(tmp: Path) -> None:
@@ -78,7 +75,6 @@ def test_miss_passes_cookie(tmp: Path) -> None:
         assert captured["cookies"] is None, "无 user_cookie 应传 None（回落默认 Cookie）"
     finally:
         del dl.get_music_info
-    print("通过: 缓存缺失时凭据解析传入上游；缺省回落默认 Cookie（None）")
 
 
 def test_zero_persistence() -> None:
@@ -104,11 +100,12 @@ def test_zero_persistence() -> None:
         hits.append(str(cfg))
 
     assert not hits, f"凭据哨兵值残留于: {hits}"
-    print("通过: 零持久化（日志/两个DB/storage全部文件/config 均无哨兵值）")
 
 
-def test_end_to_end_upstream(tmp: Path) -> None:
-    """真实上游（用户已授权）：哨兵 Cookie 请求 hires（预期上游拒绝无效凭据）"""
+@pytest.mark.upstream
+def test_end_to_end_upstream() -> None:
+    """真实上游端到端（须用户授权，-m upstream 显式运行）：
+    哨兵 Cookie 请求 hires（预期上游拒绝无效凭据），验证凭据仅内存使用"""
     import main
     sm = main.api_service.storage
     from fastapi.testclient import TestClient
@@ -121,26 +118,8 @@ def test_end_to_end_upstream(tmp: Path) -> None:
     # 无效凭据下上游大概率拒绝（404/500）；若上游降级返回了 URL 也不算失败——
     # 断言核心是凭据参与了本次上游调用且未持久化
     assert r.status_code in (200, 404, 500), f"意外状态码 {r.status_code}: {r.content[:200]}"
-    print(f"通过: 端到端上游调用完成（HTTP {r.status_code}，哨兵凭据仅内存使用）")
 
     # 若上游意外降级成功，清理脏缓存避免假 hires 内容留存
     sm.invalidate_file(song_id, quality)
 
     test_zero_persistence()
-    print("通过: 端到端后零残留复查")
-
-
-def main() -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="cookietest_"))
-    try:
-        test_hit_ignores_cookie(tmp)
-        test_miss_passes_cookie(tmp)
-        test_zero_persistence()
-        test_end_to_end_upstream(tmp)
-        print("\n全部自检通过 ✔")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-if __name__ == "__main__":
-    main()

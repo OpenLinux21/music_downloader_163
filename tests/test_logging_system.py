@@ -1,4 +1,4 @@
-"""统一日志系统自检脚本（无测试框架，直接运行）
+"""统一日志系统自检（pytest 管理）
 
 覆盖范围：
 1. GinFormatter 格式：事件行（OK/WARN/ERROR + 级别映射）、请求行（数字状态码、
@@ -10,20 +10,17 @@
 6. 旧方案废除：导入 main 后不再生成 music_api.log
 7. Werkzeug 自带请求日志被压制
 
-运行方式：.venv/bin/python tests/test_logging_system.py
+运行方式：python -m pytest tests/ -v
 """
 
 import logging
 import logging.handlers
 import re
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 
 import logger as lg
 
+ROOT = Path(__file__).resolve().parent.parent
 LOG_PATH = ROOT / "logs" / "service.log"
 TS = r"\d{4}/\d{2}/\d{2} - \d{2}:\d{2}:\d{2}"
 US = r"\d+\.\d{3}µs"
@@ -65,7 +62,6 @@ def test_formatter_lines() -> None:
     assert "\x1b[33m404\x1b[0m" in line
     # 耗时格式统一为微秒 3 位小数
     assert re.search(US, line)
-    print("通过: GinFormatter 事件行/请求行/ANSI 着色/微秒耗时格式")
 
 
 def test_get_logger() -> None:
@@ -75,14 +71,13 @@ def test_get_logger() -> None:
     file_handlers = [h for h in a.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
     assert len(file_handlers) == 1, "文件轮转 handler 数量异常"
     assert a.propagate is False
-    print("通过: get_logger 组件复用与双 handler（控制台 + 轮转文件）")
 
 
 def _file_lines() -> list:
     assert LOG_PATH.exists(), "logs/service.log 未生成"
     text = LOG_PATH.read_text(encoding="utf-8")
     assert "\x1b[" not in text, "日志文件中混入 ANSI 转义码"
-    return [l for l in text.splitlines() if l.strip()]
+    return [line for line in text.splitlines() if line.strip()]
 
 
 def test_file_output() -> None:
@@ -92,7 +87,6 @@ def test_file_output() -> None:
     lines = _file_lines()
     assert len(lines) == before + 1
     assert re.search(rf"\[FILETEST\] {TS} \| 201 \| {US} \| 10\.0\.0\.9 \| POST /download", lines[-1])
-    print("通过: 落盘轮转文件内容与格式")
 
 
 def test_flask_integration() -> None:
@@ -100,44 +94,26 @@ def test_flask_integration() -> None:
     assert not (ROOT / "music_api.log").exists(), "旧 music_api.log 仍被生成"
     from fastapi.testclient import TestClient
     client = TestClient(main.app)
-    before = len([l for l in _file_lines() if l.startswith("[SERVER]")])
+    before = len([line for line in _file_lines() if line.startswith("[SERVER]")])
     resp = client.get("/health")
     assert resp.status_code == 200
-    server_lines = [l for l in _file_lines() if l.startswith("[SERVER]")]
+    server_lines = [line for line in _file_lines() if line.startswith("[SERVER]")]
     assert len(server_lines) == before + 1, f"请求数不符: {before} -> {len(server_lines)}"
-    assert re.search(rf"\[SERVER\] {TS} \| 200 \| {US} \| (127\.0\.0\.1|testclient) \| GET /health", server_lines[-1]), \
-        f"请求行不匹配: {server_lines[-1]!r}"
-    print("通过: Flask 请求产生单一 GIN 风格请求行，旧 music_api.log 已废除")
+    pattern = rf"\[SERVER\] {TS} \| 200 \| {US} \| (127\.0\.0\.1|testclient) \| GET /health"
+    assert re.search(pattern, server_lines[-1]), f"请求行不匹配: {server_lines[-1]!r}"
 
 
 def test_downloader_component() -> None:
     from music_downloader import MusicDownloader
     d = MusicDownloader()
-    before = len([l for l in _file_lines() if l.startswith("[DOWNLOADER]")])
+    before = len([line for line in _file_lines() if line.startswith("[DOWNLOADER]")])
     d.logger.warning("自检测试消息")
-    lines = [l for l in _file_lines() if l.startswith("[DOWNLOADER]")]
+    lines = [line for line in _file_lines() if line.startswith("[DOWNLOADER]")]
     assert len(lines) == before + 1 and "WARN" in lines[-1] and "自检测试消息" in lines[-1]
-    print("通过: DOWNLOADER 组件事件行")
 
 
 def test_werkzeug_quiet() -> None:
     """迁移 FastAPI/uvicorn 后无 Werkzeug；uvicorn access log 由 start.py 显式关闭"""
-    import inspect
     from pathlib import Path as _Path
     src = (_Path(__file__).resolve().parent.parent / "start.py").read_text(encoding="utf-8")
     assert "access_log=False" in src, "uvicorn access log 未关闭（会与统一请求行重复）"
-    print("通过: uvicorn access log 已关闭（统一请求行单点输出）")
-
-
-def main() -> None:
-    test_formatter_lines()
-    test_get_logger()
-    test_file_output()
-    test_flask_integration()
-    test_downloader_component()
-    test_werkzeug_quiet()
-    print("\n全部自检通过 ✔")
-
-
-if __name__ == "__main__":
-    main()

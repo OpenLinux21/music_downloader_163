@@ -21,12 +21,12 @@ import re
 import sys
 import tomllib
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 CONFIG_FILE = "config.toml"
 
 # 内置默认值：config.toml 缺失的键回落到这里
-DEFAULTS: Dict[str, Dict[str, Any]] = {
+DEFAULTS: dict[str, dict[str, Any]] = {
     "server": {
         "host": "127.0.0.1",
         "port": 5000,
@@ -46,9 +46,9 @@ DEFAULTS: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _merge_defaults(cfg: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     """把用户配置覆盖到默认值之上（仅按节合并，未知节/键原样保留）"""
-    merged: Dict[str, Any] = {sec: dict(vals) for sec, vals in DEFAULTS.items()}
+    merged: dict[str, Any] = {sec: dict(vals) for sec, vals in DEFAULTS.items()}
     for sec, vals in (cfg or {}).items():
         if isinstance(vals, dict) and isinstance(merged.get(sec), dict):
             merged[sec].update(vals)
@@ -57,7 +57,7 @@ def _merge_defaults(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
-def load_config(path: str | Path = CONFIG_FILE) -> Dict[str, Any]:
+def load_config(path: str | Path = CONFIG_FILE) -> dict[str, Any]:
     """严格读取配置文件并合并默认值
 
     Raises:
@@ -69,7 +69,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> Dict[str, Any]:
     return _merge_defaults(cfg)
 
 
-def get_config(path: str | Path = CONFIG_FILE) -> Dict[str, Any]:
+def get_config(path: str | Path = CONFIG_FILE) -> dict[str, Any]:
     """服务用便捷读取：文件缺失回落默认值；解析错误直接抛出"""
     try:
         return load_config(path)

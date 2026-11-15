@@ -1,0 +1,26 @@
+# ruff 代码检查配置（开发期质量门禁，提交前须全仓零告警）
+# 运行方式：.venv/bin/ruff check .（自动修复：.venv/bin/ruff check --fix .）
+
+# 目标运行版本：与项目 .venv / Dockerfile 一致（Python 3.12）
+target-version = "py312"
+
+# 行长度：按存量代码实测取 120（默认 88 会引入大量无关换行改动）
+line-length = 120
+
+# 排除目录：虚拟环境、生成产物与前端源码（无 Python 代码）
+exclude = [
+    ".venv",
+    "downloads",
+    "logs",
+    "storage",
+    "frontend",
+    "__pycache__",
+]
+
+[lint]
+# 规则集：E/pycodestyle、F/pyflakes、I/isort、B/bugbear、UP/pyupgrade
+select = ["E", "F", "I", "B", "UP"]
+
+[lint.per-file-ignores]
+# FastAPI 传统签名惯用写法：路由依赖以 Depends() 作默认参数（重构为 Annotated 属行为敏感改动）
+"main.py" = ["B008"]

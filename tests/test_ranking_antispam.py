@@ -1,4 +1,4 @@
-"""排行榜与防刷自检脚本（无测试框架，直接运行）
+"""排行榜与防刷自检（pytest 管理）
 
 覆盖范围：
 1. HMAC 签发/校验：有效回环；篡改载荷、伪造签名、过期、格式错误均判无效
@@ -9,21 +9,14 @@
 6. /download 计数 + /rank API 集成（缓存命中路径，不触上游）
 7. 端到端（真实交付路径）：两个会话分别下载同一已缓存歌曲 → 独立会话计数 +2
 
-运行方式：.venv/bin/python tests/test_ranking_antispam.py
+运行方式：python -m pytest tests/ -v
 """
 
-import shutil
-import sqlite3
 import stat
-import sys
-import tempfile
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from session_manager import SessionManager, COOKIE_NAME
+from session_manager import COOKIE_NAME, SessionManager
 
 
 def test_issue_and_resolve(tmp: Path) -> None:
@@ -46,7 +39,6 @@ def test_issue_and_resolve(tmp: Path) -> None:
     assert sm.resolve_token("a.b.c") is None
     assert sm.resolve_token("") is None
     assert sm.resolve_token(None) is None
-    print("通过: HMAC 签发/校验（回环 + 篡改/伪造/过期/格式错误全拒）")
 
 
 def test_secret_file(tmp: Path) -> None:
@@ -57,7 +49,6 @@ def test_secret_file(tmp: Path) -> None:
     sm2 = SessionManager(tmp / "s_secret")
     assert sm2.secret_path.read_bytes() == content, "密钥被重建（应幂等）"
     assert sm1._secret == sm2._secret
-    print("通过: 密钥文件 0600 权限且幂等")
 
 
 def test_download_dedup(tmp: Path) -> None:
@@ -69,7 +60,6 @@ def test_download_dedup(tmp: Path) -> None:
     with sm._connect() as conn:
         cnt = conn.execute("SELECT COUNT(*) AS c FROM downloads WHERE song_id = 1").fetchone()["c"]
     assert cnt == 2, f"独立会话计数异常: {cnt}"
-    print("通过: 同会话同歌曲去重、跨会话分别计数")
 
 
 def test_rank_order(tmp: Path) -> None:
@@ -88,11 +78,12 @@ def test_rank_order(tmp: Path) -> None:
         ("s1", 303, now - 40 * 86400), ("s2", 303, now - 40 * 86400),
         ("s1", 304, now), ("s2", 304, now),
     ]
+    insert_sql = (
+        "INSERT OR REPLACE INTO downloads (session_id, song_id, quality, downloaded_at)"
+        " VALUES (?, ?, 'standard', ?)"
+    )
     with sm._connect() as conn:
-        conn.executemany(
-            "INSERT OR REPLACE INTO downloads (session_id, song_id, quality, downloaded_at) VALUES (?, ?, 'standard', ?)",
-            seeds,
-        )
+        conn.executemany(insert_sql, seeds)
         conn.execute("ATTACH DATABASE ? AS meta", (str(tmp / "s_rank" / "root.db"),))
         for sid_, name in ((300, "乙歌"), (301, "甲歌"), (302, "丙歌"), (303, "窗口外")):
             conn.execute(
@@ -108,12 +99,12 @@ def test_rank_order(tmp: Path) -> None:
     # 顺序确定且可复现即为满足「下载量一致时按名称排序」
     assert ids == [300, 301, 302], f"排名异常: {rank}"
     assert rank[0]["name"] == "乙歌" and rank[1]["name"] == "甲歌", "并列未按名称排序"
-    print(f"通过: 排名（计数降序、并列按名称、窗口过滤、无元数据不入榜）：{[(r['song_id'], r['session_count']) for r in rank]}")
 
 
 def test_middleware(tmp: Path) -> None:
-    import main
     from fastapi.testclient import TestClient
+
+    import main
     client = TestClient(main.app)
 
     # 无 Cookie → 签发并 Set-Cookie
@@ -131,12 +122,12 @@ def test_middleware(tmp: Path) -> None:
     # 带无效 Cookie → 重新签发新会话
     r3 = client.get("/health", headers={"Cookie": f"{COOKIE_NAME}=a.b.c.deadbeef"})
     assert COOKIE_NAME in (r3.headers.get("set-cookie") or ""), "无效 Cookie 应重签发"
-    print("通过: 会话中间件（签发/复用/无效重签 + HttpOnly Cookie）")
 
 
 def test_download_count_and_rank_api(tmp: Path) -> None:
-    import main
     from fastapi.testclient import TestClient
+
+    import main
     sm = main.api_service.storage
     msm = main.session_manager
     song_id = 502
@@ -170,22 +161,3 @@ def test_download_count_and_rank_api(tmp: Path) -> None:
     assert api["success"] is True and api["data"]["size"] >= 1
     hit = [x for x in api["data"]["rank"] if x["song_id"] == song_id]
     assert hit and hit[0]["name"] == "排行计数" and hit[0]["session_count"] == 2
-    print(f"通过: /download 计数与 /rank API（同会话去重、跨会话累计）")
-
-
-def main() -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="ranktest_"))
-    try:
-        test_issue_and_resolve(tmp)
-        test_secret_file(tmp)
-        test_download_dedup(tmp)
-        test_rank_order(tmp)
-        test_middleware(tmp)
-        test_download_count_and_rank_api(tmp)
-        print("\n全部自检通过 ✔")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-if __name__ == "__main__":
-    main()
