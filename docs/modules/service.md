@@ -46,6 +46,7 @@
 | 方法 | 行为要点 |
 | --- | --- |
 | 日志 | `get_logger("SERVER", config.log_level)`：GIN 风格统一日志（`logger.py`），控制台 ANSI 着色 + `logs/service.log` 5MB 轮转 ×3（无着色） |
+| 会话管理 | `session_manager = SessionManager(config.storage_dir)`（模块级别名暴露）：防刷 Cookie 签发/校验与排行榜（详见 `docs/database.md` 第 4 节） |
 | `_get_cookies` | 调 `load_cookies()` 每请求实时读 `config.toml` 的 `server.default_cookie`；未配置打 warning 返回 `{}`；异常返回 `{}` 不中断 |
 | `_extract_music_id` | 短链 `163cn.tv` 展开（不跟随重定向取 Location）→ `music.163.com` 提取 `id=` → 否则原样 strip；任何异常返回原串 |
 | `_format_file_size` | B/KB/MB/GB/TB 自动换算，两位小数 |
@@ -56,6 +57,7 @@
 
 | 组件 | 行为 |
 | --- | --- |
+| `session_middleware` 中间件 | 每请求解析防刷 Cookie（先验签再检查时效）：有效复用会话 ID，无效/过期重新签发并经 Set-Cookie 下发（`nu_session`，HttpOnly + SameSite=Lax + 7 天）；会话 ID 写入 `request.state.session_id` |
 | `log_request_line` 中间件 | 每请求输出一条 GIN 风格请求行（`[SERVER] 时间 \| 状态码 \| 微秒耗时 \| IP \| METHOD 路径`）；不记录请求体 |
 | `CORSMiddleware` | `allow_origins=["*"]`、methods `GET,POST,OPTIONS`、headers `Content-Type,Authorization`、Max-Age 3600（跨域请求时由中间件追加允许头） |
 | `get_request_data` 依赖 | 统一取参：GET 取 query；POST 合并表单与 JSON（JSON 同名键覆盖表单）；`async def` 依赖先行执行，路由本体为同步 `def`（FastAPI 自动入线程池，与同步上游调用/sqlite 短连接兼容） |
@@ -73,6 +75,7 @@
 | `GET\|POST /playlist` | `get_playlist` | 是 | 包装为 `data={status:'success', playlist:结果}`；**id 不做链接解析** |
 | `GET\|POST /album` | `get_album` | 是 | 包装为 `data={status:200, album:结果}`；**id 不做链接解析** |
 | `GET\|POST /download` | `download_music_api` | 是 | 见下文 6.2 |
+| `GET /rank` | `download_rank` | 是 | 下载排行榜：窗口内独立会话数 TOP 20，并列按名称；实现见 `docs/database.md` 第 4 节 |
 | `GET /api/info` | `api_info` | 否 | 服务元信息；`supported_qualities` 硬编码 7 项缺 `dolby`（已知问题 #4） |
 
 ### 6.1 `/song` 实现
@@ -89,7 +92,8 @@
 3. 委托 `downloader.download_music_file(music_id, quality, cookies=…)`：内部先查缓存键 `(song_id, quality)` 并做 SHA-256 完整性校验，通过则复用文件并经 root.db 组装响应（`cached=true`，凭据与上游均不使用）；校验不通过判定损坏，删除重下并重新登记哈希；未命中才发起唯一一轮上游调用（URL/详情/歌词一次取齐，携带请求级凭据）并落盘登记；
 4. `DownloadException` 返回 404（版权限制/取链失败等）；其他下载失败返回 500；
 5. 命中缓存时执行 `storage.record_access(song_id)` 累加访问量；
-6. `format=json` 返回下载信息（含 `cached` 字段）；`format=file` 用 `FileResponse(filename=…)` 返回文件流，附 `X-Download-Message`、`X-Download-Filename`（实际文件名，`quote` 编码）响应头。
+6. `format=json` 返回下载信息（含 `cached` 字段）；`format=file` 用 `FileResponse(filename=…)` 返回文件流，附 `X-Download-Message`、`X-Download-Filename`（实际文件名，`quote` 编码）响应头；
+7. 真实完成交付后 `session_manager.record_download(request.state.session_id, song_id, quality)` 计入排行榜（同会话同歌曲去重）。
 
 ## 7. 启动流程（`start.py`，统一启动入口）
 

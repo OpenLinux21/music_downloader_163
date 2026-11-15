@@ -176,6 +176,12 @@ finally：删除封面临时文件（已落盘 cover.jpg 不删）与残留 .tag
   → 路由层 parse_cookie_string 内存解析 → 传给下载器本次上游调用 → 请求结束即丢弃
   → 严禁落盘/写日志/写 DB；缓存命中时不消耗凭据；无凭据回落默认 Cookie
 
+【防刷会话 Cookie（2026-11-15 新增，全请求生效）】
+  服务端密钥 storage/.ranking_secret（0600，仅服务端持有）
+  → 每请求经 session_middleware 校验 Cookie nu_session（先验签再检查时效）
+  → 无效/过期重新签发（随机 session_id + HMAC-SHA256 签名，HttpOnly/SameSite=Lax/7 天）
+  → /download 真实交付后按 (session_id, song_id) 去重记账 → /rank 按独立会话数出榜
+
 【读取侧（每请求执行，无缓存）】
   load_cookies()
     → config_loader.get_default_cookie() 实时读取 config.toml（文件缺失/未配置返回空串，不抛异常）

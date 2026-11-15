@@ -35,6 +35,7 @@ try:
     )
     from music_downloader import MusicDownloader, DownloadException
     from storage_manager import StorageManager
+    from session_manager import SessionManager, COOKIE_NAME, SESSION_TTL_SECONDS
     from config_loader import get_config
     from logger import get_logger, log_request
 except ImportError as e:
@@ -100,6 +101,8 @@ class MusicAPIService:
             multi_thread=self.config.multi_thread,
             speed_limit_kb=self.config.speed_limit_kb,
         )
+        # 防刷会话与排行榜（cookies.db + HMAC 签名 Cookie，密钥仅服务端持有）
+        self.session_manager = SessionManager(self.config.storage_dir)
 
         self.logger.info(f"音乐API服务初始化完成，存储目录: {self.storage_path.resolve()}")
         self.storage.start_cleanup_daemon()
@@ -187,6 +190,7 @@ config = APIConfig(
 )
 app = FastAPI(title="网易云音乐API服务", version="2.0.0")
 api_service = MusicAPIService(config)
+session_manager = api_service.session_manager  # 模块级别名：中间件与 /rank 使用
 
 # 限速器：按来源 IP，阈值读自 config.toml（默认 10 次/分钟、25 次/小时）
 limiter = Limiter(key_func=get_remote_address)
@@ -203,6 +207,26 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
     max_age=3600,
 )
+
+
+@app.middleware("http")
+async def session_middleware(request: Request, call_next):
+    """防刷会话：先验签再检查时效；无效/过期即重新签发并经 Set-Cookie 下发（HttpOnly）"""
+    token = request.cookies.get(COOKIE_NAME)
+    session_id = session_manager.resolve_token(token)
+    issued_new = session_id is None
+    if issued_new:
+        token, session_id = session_manager.issue_token(
+            request.client.host if request.client else ""
+        )
+    request.state.session_id = session_id
+    response = await call_next(request)
+    if issued_new:
+        response.set_cookie(
+            COOKIE_NAME, token,
+            max_age=SESSION_TTL_SECONDS, httponly=True, samesite="lax", path="/",
+        )
+    return response
 
 
 @app.middleware("http")
@@ -550,6 +574,11 @@ def download_music_api(request: Request, data: Dict[str, Any] = Depends(get_requ
         else:
             api_service.logger.info(f"下载完成: {file_path.name}")
 
+        # 排行榜计数：仅真实完成交付计入（中间件保证每请求均有会话），同会话同歌曲去重
+        api_service.session_manager.record_download(
+            request.state.session_id, int(info.id), quality
+        )
+
         filename = file_path.name
 
         if return_format == 'json':
@@ -592,6 +621,22 @@ def download_music_api(request: Request, data: Dict[str, Any] = Depends(get_requ
         return APIResponse.error(f"下载异常: {str(e)}", 500)
 
 
+@app.get('/rank')
+@limiter.limit(RATE_MINUTE)
+@limiter.limit(RATE_HOUR)
+def download_rank(request: Request):
+    """下载排行榜API（最近窗口内独立会话数 TOP 20，并列按名称排序）"""
+    try:
+        rank = session_manager.rank_top()
+        return APIResponse.success(
+            {"window_days": session_manager.rank_window_days, "size": len(rank), "rank": rank},
+            "获取下载排行榜成功"
+        )
+    except Exception as e:
+        api_service.logger.error(f"获取排行榜异常: {e}\n{traceback.format_exc()}")
+        return APIResponse.error(f"获取排行榜失败: {str(e)}", 500)
+
+
 @app.get('/api/info')
 def api_info():
     """API信息接口"""
@@ -607,6 +652,7 @@ def api_info():
                 '/playlist': 'GET/POST - 获取歌单详情',
                 '/album': 'GET/POST - 获取专辑详情',
                 '/download': 'GET/POST - 下载音乐',
+                '/rank': 'GET - 下载排行榜（TOP 20）',
                 '/api/info': 'GET - API信息'
             },
             'supported_qualities': [

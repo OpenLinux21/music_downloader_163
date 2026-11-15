@@ -24,6 +24,7 @@
 | 下载与元数据 | `feat/download-metadata` 分支（2026-11-15） | 歌词嵌入（三格式实测）+ 多线程 Range 下载（自动回退）+ KB/s 限速 |
 | 用户自有凭据 | `feat/user-cookie` 分支（2026-11-15） | `/download` 请求级凭据（localStorage + 内存使用零持久化）+ 前端 Cookie 入口 |
 | FastAPI 迁移 | `feat/fastapi-migration` 分支（2026-11-15） | Flask → FastAPI（uvicorn）；大写别名移除；slowapi 限速；依赖清单重构 |
+| 排行榜与防刷 | `feat/ranking-antispam` 分支（2026-11-15） | HMAC 防刷会话 Cookie + cookies.db 交付去重 + `/rank` TOP20 排行榜 |
 
 ## 2. 重要设计决策及动机（依据代码现状推断与提交记录）
 
@@ -119,6 +120,13 @@
 动机：用户要求的公开 API 与按 IP 限速能力在 Flask 生态需要额外拼装（限速/异步支持均不如 FastAPI+slowapi 成熟），且 FastAPI 的依赖注入与异常处理器使统一取参/统一响应更整洁。
 取舍：路由保持同步 `def`（自动入线程池），不做 async 化——上游调用与 sqlite/ffmpeg 均为同步阻塞实现，async 化收益低而风险高；限速存储用 `memory://`（单进程语义，多进程部署需升级共享存储）；大写别名直接移除而非保留（前端同仓库可控，破坏性变更已在 `docs/api.md` 顶部与知识库标注）。
 破坏性变更清单：①`/Song_V1`、`/Search`、`/Playlist`、`/Album`、`/Download` 路径不再可用；②`colorama` 等依赖移除（外部复用 `requirements.txt` 的部署需重新 `pip install -r`）；③Python 层导入 `main.app` 的集成方式由 Flask test_client 变为 `fastapi.testclient.TestClient`。
+
+### 2.16 排行榜与防刷会话（2026-11-15，feat/ranking-antispam）
+
+决策：新增 `session_manager.py` 独立管理防刷会话与排行榜；防刷 Cookie `nu_session` 由服务端 HMAC-SHA256 签名（密钥 32 字节随机持久化于 `storage/.ranking_secret`，0600 权限，绝不下发），载荷含随机会话 ID/签发/过期时间（默认 7 天），校验先验签再查时效，无效/过期即重签发；`cookies.db` 的 downloads 表以 `(session_id, song_id)` 为主键做交付去重——同一浏览器反复下载同一歌曲只计一次；`/rank` 按最近 30 天独立会话数出 TOP 20，并列按名称排序（SQLite BINARY 序，确定可复现）。
+动机：外部脚本可无成本反复调下载接口刷排名，需要服务端可验证的会话身份；HMAC 签名 + 密钥不下发使客户端无法自造合法 Cookie。
+取舍：计数取「独立会话数」而非原始次数（同一用户反复下载视为一次，直接对应用户防刷诉求）；统计窗口固定 30 天常数体现"最近"语义（可调）；排名联查 root.db 只展示有元数据的歌曲，被清理歌曲自然出榜，避免跨库级联删除的复杂度；旧页面以最小区块展示榜单，完整交互由第十一步 React 重写承接。
+安全边界：HMAC 只防「伪造 Cookie」与「批量领新身份刷数」，不防同密钥服务端内部误用；密钥文件随 storage/ 被 .gitignore 排除，丢失后所有已签发 Cookie 失效（自动重签发，业务无感）。
 
 ## 3. 历史遗留与不一致（详见 docs/knowledge-base.md）
 

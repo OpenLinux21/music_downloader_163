@@ -12,7 +12,7 @@
 | 请求方式 | GET / POST；POST 同时接受 JSON 体与表单（JSON 优先） |
 | 响应格式 | JSON（`/download` 默认返回音频文件流，`format=json` 时返回 JSON） |
 | 鉴权 | 无。服务不校验调用方身份；上游鉴权依赖 `config.toml` 中服务器默认 Cookie |
-| 限速 | slowapi 按来源 IP：业务路由（`/search` `/song` `/playlist` `/album` `/download`）默认 10 次/分钟 + 25 次/小时（读自 `config.toml` 的 `api.*`），超限返回 429 统一结构；`/health`、`/api/info`、`/` 不限速（监控可用性优先） |
+| 限速 | slowapi 按来源 IP：业务路由（`/search` `/song` `/playlist` `/album` `/download` `/rank`）默认 10 次/分钟 + 25 次/小时（读自 `config.toml` 的 `api.*`），超限返回 429 统一结构；`/health`、`/api/info`、`/` 不限速（监控可用性优先） |
 | CORS | 跨域请求允许任意来源（`Access-Control-Allow-Origin: *`，CORSMiddleware 实现） |
 | Web 框架 | FastAPI（uvicorn 托管）；**2026-11-15 由 Flask 迁移，大写别名路由（`/Song_V1` 等）已移除，属破坏性变更，前端调用已同步改为小写路径** |
 
@@ -194,7 +194,23 @@ POST /song {"id":"123","level":"xxx"}
 - `filename`/`file_path` 均为实际存储文件名（`storage/<song_id>/歌曲名.扩展名`，扩展名冲突时含音质段），原「歌名 [音质]」展示名与双重命名规则已废除（知识库已知问题 #3 已修复）。
 - 下载链路只经下载器一次上游交互（链接/详情/歌词一次取齐），原重复调用已消除（知识库已知问题 #5 已修复）；上游取链失败（版权/音质不支持等 `DownloadException`）返回 404。
 
-### 4.8 `GET /api/info` — 服务信息
+### 4.8 `GET /rank` — 下载排行榜（2026-11-15 新增）
+
+无参数（需浏览器持有服务端签发的防刷 Cookie，首次访问任意页面/接口自动签发）。`data` 结构：
+
+```json
+{
+  "window_days": 30,
+  "size": 20,
+  "rank": [
+    {"song_id": 347230, "name": "歌名", "artists": "歌手", "session_count": 5}
+  ]
+}
+```
+
+说明：`session_count` 为统计窗口（默认 30 天）内的**独立防刷会话数**——同一浏览器反复下载同一歌曲只计一次，仅真实完成交付计入；计数并列按歌曲名升序，TOP 20；已清理歌曲不入榜。防刷 Cookie 由服务端 HMAC-SHA256 签名（密钥仅服务端持有），外部脚本无法批量构造有效会话。
+
+### 4.9 `GET /api/info` — 服务信息
 
 无参数。`data` 含 `name`（网易云音乐API服务）、`version`（2.0.0）、`endpoints`（7 个端点及说明）、`supported_qualities`（**当前为 7 项，缺 `dolby`，与其他接口校验列表不一致**）、`config`（`storage_dir` 存储目录绝对路径、`max_cache_mb` 缓存上限、`max_file_size` 500MB、`request_timeout` 30s）。
 

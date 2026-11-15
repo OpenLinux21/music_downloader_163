@@ -19,6 +19,7 @@ Netease_url/
 ├── music_api.py            # 网易云 API 封装：eapi 加密、HTTP 客户端、二维码登录、Cookie 工具
 ├── music_downloader.py     # 音乐下载器：同步/异步/批量下载、缓存复用、ffmpeg 元数据写入、CLI 入口
 ├── storage_manager.py      # 存储与缓存管理：storage/ 布局、root.db（songs/files）、sha256sum.db（哈希）、双策略清理
+├── session_manager.py      # 防刷会话与排行榜：HMAC Cookie 签发校验、cookies.db、/rank 统计
 ├── qr_login.py             # 二维码登录 CLI 工具：Cookie 读写/备份/校验（与 music_api 存在接口不匹配，见知识库）
 ├── config_loader.py        # 配置读取模块：tomllib 解析 config.toml、默认值合并、Cookie 读写
 ├── logger.py               # 统一日志模块：GIN 风格格式（控制台彩色 + logs/service.log 轮转）
@@ -100,7 +101,7 @@ Netease_url/
 ## 5. 并发与运行模型
 
 - Web 层：uvicorn 托管 FastAPI（ASGI 单进程，`access_log=False`，请求行由统一日志中间件输出）；路由为同步 `def`，FastAPI 自动派发到线程池执行；无生产级进程管理。
-- 限速：slowapi 按来源 IP（`get_remote_address`）对 `/search` `/song` `/playlist` `/album` `/download` 应用每分钟/每小时双阈值（读自 `config.toml`，默认 10/25），超限 429；`/health` `/api/info` `/` 不限速。
+- 限速：slowapi 按来源 IP（`get_remote_address`）对 `/search` `/song` `/playlist` `/album` `/download` `/rank` 应用每分钟/每小时双阈值（读自 `config.toml`，默认 10/25），超限 429；`/health` `/api/info` `/` 不限速。
 - Cookie 读取：每个请求处理过程中调用 `load_cookies()` 实时读取 `config.toml` 的 `server.default_cookie` 并解析为字典，无缓存，修改配置即时生效。
 - 下载层：同步下载使用 `requests` 流式写入（先写 `.part` 临时文件，完成后原子改名）；异步/批量下载使用 `asyncio.Semaphore(3)` 限制并发（`MusicDownloader(max_concurrent=3)`）。
 - 元数据写入：调用外部 `ffmpeg` 进程（`subprocess.run`，超时 120 秒），ffmpeg 路径在启动时检测一次并在每次写入前懒加载重试（支持服务运行中途安装 ffmpeg）。
@@ -116,6 +117,8 @@ Netease_url/
 | `cookie.backup.<suffix>.<时间戳>.txt` | Cookie 覆盖/清除前的备份 | `qr_login.py` 的 `_backup_cookie()` |
 | `storage/root.db` | 元数据库：`songs`（元数据与访问量）/ `files`（音质文件登记） | `storage_manager.py` 初始化与登记 |
 | `storage/sha256sum.db` | 哈希追踪库：`file_hashes`（storage 全量文件 SHA-256，命中前校验、损坏失效重下） | `storage_manager.py` 登记与校验 |
+| `storage/cookies.db` | 防刷会话库：`sessions`（签发记录）/ `downloads`（真实交付去重记账） | `session_manager.py` |
+| `storage/.ranking_secret` | HMAC-SHA256 签名密钥（0600，仅服务端持有，绝不下发） | `session_manager.py` 首次使用时生成 |
 | `storage/<song_id>/` | 单曲资源：各音质音频 + `cover.jpg` + `lyric.lrc` | 下载器落盘（首次下载登记，缓存命中复用） |
 | `storage/albums/<album_id>/<song_id>/` | 归属专辑的歌曲副本 | 下载完成 `copy2` 复制 |
 | `downloads/` | 遗留下载产物（已由 storage/ 取代，无新写入） | 历史运行产生，gitignore |
