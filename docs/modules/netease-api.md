@@ -96,7 +96,7 @@ qr_login()          完整流程：create → while 循环 check（间隔 2s）
 
 | 分组 | 方法 | 行为 |
 | --- | --- | --- |
-| Cookie 存取 | `_read_cookie` / `_write_cookie` / `_backup_cookie(suffix)` / `_clear_cookie` | 经 `config_loader` 读写 `config.toml` 的 `server.default_cookie`；覆盖/清除前把旧 Cookie 备份到 `cookie.backup.<suffix>.<时间戳>.txt`；写空串被拒绝（登出经 `save_default_cookie("")` 实现） |
+| Cookie 存取 | `_read_cookie` / `_write_cookie` / `_backup_cookie(suffix)` / `_clear_cookie` | 经 `config_loader` 读写 `config.toml` 的 `server.default_cookie`；覆盖/清除前把旧 Cookie 备份到配置文件所在目录的 `cookie.backup.<suffix>.<时间戳>.txt`（2026-11-16 起，原为固定相对路径，测试运行时会污染项目根）；写空串被拒绝（登出经 `save_default_cookie("")` 实现） |
 | 状态判定 | `_is_cookie_valid` / `_get_cookie_info` | 含任一重要键即有效；info 含配置文件路径、Cookie 数量、缺失键 |
 | 业务方法 | `check_existing_login` / `interactive_login` / `save_cookie` / `show_login_info` / `logout` | `save_cookie` 先备份再写入再校验；`logout` 备份后缀为 `logout` 后删除文件 |
 
