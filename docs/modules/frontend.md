@@ -27,7 +27,7 @@
 | `parse` | 歌曲 ID/URL + 音质下拉（8 项含 dolby，默认 standard） | 单曲解析 |
 | `playlist` | 歌单 ID/链接 | 歌单解析 |
 | `album` | 专辑 ID/链接 | 专辑解析 |
-| `download` | 音乐 ID/URL + 音质下拉（默认 lossless）+ 进度条占位 | 音乐下载 |
+| `download` | 音乐 ID/URL + **个人 Cookie 输入（可选，localStorage 持久）** + 音质下拉（默认 lossless）+ 进度条占位 | 音乐下载 |
 
 结果区：单曲信息卡（歌名/歌手/专辑/音质/大小/大图按钮/下载链接/歌词框/APlayer 播放器）、搜索结果列表、歌单与专辑卡片（封面/名称/创建者或歌手/描述/曲目列表，每项带「解析」「下载」按钮）。
 
@@ -39,7 +39,7 @@
 | 解析按钮 | `POST /Song_V1`（`$.post` 表单） | `url`（ID 或链接原样传入）、`level`、`type=json` | `data.name/ar_name/al_name/level/size/lyric/tlyric/url/pic` |
 | 歌单解析 | `GET /Playlist` | `id`（先正则 `playlist\?id=(\d+)` 提取） | `data.playlist.coverImgUrl/name/creator/description/trackCount/tracks[]` |
 | 专辑解析 | `GET /Album` | `id`（正则 `album\?id=(\d+)`） | `data.album.coverImgUrl/name/artist/description/songs[]` |
-| 下载按钮 | `POST /Download`（XHR，表单编码） | `id`（先正则 `song\?id=(\d+)` 提取）、`quality`；`responseType=blob` | 音频二进制流 + 响应头 `X-Download-Message`、`X-Download-Filename`（解码后作为保存文件名） |
+| 下载按钮 | `POST /Download`（XHR，表单编码） | `id`（先正则 `song\?id=(\d+)` 提取）、`quality`、`user_cookie`（2026-11-15 新增：取自 `#user_cookie` 输入框，实时写入 `localStorage('netease_user_cookie')`，页面加载时回填）；`responseType=blob` | 音频二进制流 + 响应头 `X-Download-Message`、`X-Download-Filename`（解码后作为保存文件名） |
 
 注意：`/Song_V1` 的 `url` 参数不做前端解析直接传后端（后端 `_extract_music_id` 处理）；而歌单/专辑/下载是前端先行提取 ID。列表中的「下载」按钮不直接请求接口，只把 ID 填入下载区并切换到下载模式，由用户再点「下载音乐」。
 
@@ -60,6 +60,8 @@
 ### 5.3 下载实现细节
 
 使用 `XMLHttpRequest`（非 jQuery）以便读取自定义响应头与 blob：`POST /Download`（`application/x-www-form-urlencoded`），成功后从 `X-Download-Filename`（URL 编码）解码文件名，用 `URL.createObjectURL` + 隐藏 `<a>` 触发浏览器保存；下载期间禁用按钮并显示进度条动画（装饰性，无真实进度）。
+
+个人 Cookie（2026-11-15 新增）：输入框实时同步 `localStorage('netease_user_cookie')`（清空输入即移除），下载请求以 `user_cookie` 字段随 body 发送；凭据不进入任何 Cookie（document.cookie）也不经 URL 传递。
 
 ## 6. 已知缺陷与注意点
 

@@ -82,10 +82,11 @@
 ### 6.2 `/download` 实现（2026-11-15 重写）
 
 1. 校验 `quality`、`format`；
-2. 委托 `downloader.download_music_file(music_id, quality)`：内部先查缓存键 `(song_id, quality)` 并做 SHA-256 完整性校验，通过则复用文件并经 root.db 组装响应（`cached=true`）；校验不通过判定损坏，删除重下并重新登记哈希；未命中才发起唯一一轮上游调用（URL/详情/歌词一次取齐）并落盘登记（原路由层 `name_v1`+`url_v1` 预调用已删除，知识库已知问题 #5 修复）；
-3. `DownloadException` 返回 404（版权限制/取链失败等）；其他下载失败返回 500；
-4. 命中缓存时执行 `storage.record_access(song_id)` 累加访问量；
-5. `format=json` 返回下载信息（含 `cached` 字段）；`format=file` 用 `send_file(as_attachment=True)` 返回文件流，附 `X-Download-Message`、`X-Download-Filename`（实际文件名，`quote` 编码）响应头。
+2. 读取可选 `user_cookie`：内存中 `parse_cookie_string` 解析为请求级凭据（无则 `None`，上游回落 config 默认 Cookie）；凭据不落盘、不写日志、不写 DB，请求结束随局部变量丢弃；
+3. 委托 `downloader.download_music_file(music_id, quality, cookies=…)`：内部先查缓存键 `(song_id, quality)` 并做 SHA-256 完整性校验，通过则复用文件并经 root.db 组装响应（`cached=true`，凭据与上游均不使用）；校验不通过判定损坏，删除重下并重新登记哈希；未命中才发起唯一一轮上游调用（URL/详情/歌词一次取齐，携带请求级凭据）并落盘登记（原路由层 `name_v1`+`url_v1` 预调用已删除，知识库已知问题 #5 修复）；
+4. `DownloadException` 返回 404（版权限制/取链失败等）；其他下载失败返回 500；
+5. 命中缓存时执行 `storage.record_access(song_id)` 累加访问量；
+6. `format=json` 返回下载信息（含 `cached` 字段）；`format=file` 用 `send_file(as_attachment=True)` 返回文件流，附 `X-Download-Message`、`X-Download-Filename`（实际文件名，`quote` 编码）响应头。
 
 ## 7. 启动流程（`start.py`，统一启动入口）
 

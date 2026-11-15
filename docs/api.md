@@ -158,6 +158,7 @@ POST /song {"id":"123","level":"xxx"}
 | `id` | 是 | 无 | 音乐 ID 或链接（路由层做链接解析与短链展开） |
 | `quality` | 否 | `lossless` | 音质，见第 3 节 |
 | `format` | 否 | `file` | `file` 返回文件流；`json` 返回下载信息 JSON |
+| `user_cookie` | 否 | 空 | **请求级用户凭据**（2026-11-15 新增）：仅保存在用户浏览器 localStorage 并随本次下载请求发送，服务端仅在内存中解析用于本次上游调用，请求结束即丢弃——**不落盘、不写日志、不写任何数据库**（下载文件本身照常纳入缓存与哈希追踪）；缺省时使用 `config.toml` 的服务器默认 Cookie。缓存命中时不消耗凭据（不发起上游调用） |
 
 `format=file`：成功返回音频文件流（`Content-Disposition: attachment`，文件按实际音频格式命名），并附加响应头：
 

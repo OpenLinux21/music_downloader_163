@@ -73,7 +73,7 @@ MusicDownloader(storage_dir="storage", max_concurrent=3, ffmpeg_path=None,
 
 ## 4. 信息获取 `get_music_info(music_id, quality)`
 
-执行顺序：`load_cookies()` → `api.get_song_url()` → `api.get_song_detail()` → `api.get_lyric()` → 组装 `MusicInfo`。任一环节失败抛 `DownloadException`。（原调试残留 `print(url_result)` 已于 2026-11-15 移除，知识库已知问题 #6 已修复）
+执行顺序：`cookies`（请求级凭据，`None` 时回落 `load_cookies()` 读 config）→ `api.get_song_url()` → `api.get_song_detail()` → `api.get_lyric()` → 组装 `MusicInfo`。任一环节失败抛 `DownloadException`。（原调试残留 `print(url_result)` 已于 2026-11-15 移除，知识库已知问题 #6 已修复）
 
 ## 5. 四种下载方式
 
