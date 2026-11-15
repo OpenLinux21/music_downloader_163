@@ -142,6 +142,12 @@
 取舍：dist 与 node_modules 不入 Git（部署时构建，用户确认）；播放器用原生 `<audio>` 替代 APlayer（最小依赖）；bundle 约 1MB（antd 全量引入，个人工具规模可接受，代码分割属未来演进）；错误处理集中在 `api.js` 解析统一响应结构，顺带消除旧页面 `data.data.msg` 缺陷（知识库已知问题 #8）。
 风险边界：UI 交互（Tabs 切换、表单校验、下载保存对话框）经构建成功 + 托管断言验证，浏览器端人工冒烟未执行（无 GUI 环境），由用户按「使用文档」实际操作确认。
 
+### 2.19 开发工具链：ruff 门禁 + pytest 测试框架（2026-11-16，chore/ruff-pytest）
+
+决策：引入 ruff 0.17.5 作为提交前门禁（规则集 E/F/I/B/UP，line-length 120——实测存量代码在此行长下仅 4 处超限，88 则需 163 处无关换行；`main.py` 豁免 B008，因 FastAPI 传统签名惯用 `Depends()` 默认参数，重构为 Annotated 属行为敏感改动）；同时将 `tests/` 11 个「无框架直接运行」自检脚本迁移为 pytest 统一管理（`python -m pytest tests/ -v` 为唯一测试入口），bare assert 断言语义与覆盖范围零改动。
+动机：自检脚本各自实现 main() 汇总、临时目录管理与自运行入口，无法单测/选择性运行/输出结构化结果；无 lint 门禁时风格漂移无约束。
+取舍：①真实上游端到端（3 个，累计下载约 30MB+）标记 `@pytest.mark.upstream` 并默认 `-m "not upstream"` 跳过——上游消耗须逐次授权（doc-maintenance 原则），默认套件保持纯本地约 6 秒全绿；②slowapi 限速器为进程内存态，原「每文件独立进程」的天然隔离在 pytest 单进程下失效，conftest 以「模块切换」粒度重置 `limiter._storage` 精确复刻原语义（曾考虑每测试重置，会破坏文件内 429 断言的用例间耦合，否决）；③业务代码仅接受行为零变更的风格修复（PEP 585/604 注解现代化、导入排序、`raise ... from None`——消息模板已内嵌原始错误文本、行宽换行），不使用 ruff format 避免大规模重排；④ruff/pytest 为开发依赖装于 .venv，不建 requirements-dev.txt（用户确认暂不固化）。
+
 ## 3. 历史遗留与不一致（详见 docs/knowledge-base.md）
 
 - `entrypoint.sh` 的 `--level/--mode/--url` 与 `.env` 变量为 Docker 化时期产物，`main.py` 从未实现对应参数解析（已知问题 #2）。**已于 2026-11-15 随统一启动入口任务废除**：`entrypoint.sh` 改调 `start.py`，`.env` 删除。

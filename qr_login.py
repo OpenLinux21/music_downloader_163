@@ -7,16 +7,15 @@
 - 用户友好的交互界面
 """
 
+import datetime
+import logging
 import sys
 import time
-import logging
-import datetime
 from pathlib import Path
-from typing import Optional, Tuple
 
 try:
-    from music_api import QRLoginManager, APIException, parse_cookie_string
     from config_loader import get_default_cookie, save_default_cookie
+    from music_api import APIException, QRLoginManager, parse_cookie_string
 except ImportError as e:
     print(f"导入模块失败: {e}")
     print("请确保 music_api.py 与 config_loader.py 文件存在且可用")
@@ -65,7 +64,7 @@ class QRLoginClient:
             self.logger.error(f"写入 Cookie 失败: {e}")
             return False
 
-    def _backup_cookie(self, suffix: str = "backup") -> Optional[Path]:
+    def _backup_cookie(self, suffix: str = "backup") -> Path | None:
         cookie = self._read_cookie()
         if not cookie:
             return None
@@ -116,7 +115,7 @@ class QRLoginClient:
             self.logger.error(f"检查登录状态失败: {e}")
             return False
 
-    def interactive_login(self) -> Tuple[bool, Optional[str]]:
+    def interactive_login(self) -> tuple[bool, str | None]:
         """交互式二维码登录"""
         try:
             print("\n=== 网易云音乐二维码登录 ===")

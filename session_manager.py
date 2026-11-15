@@ -25,7 +25,7 @@ import secrets
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 COOKIE_NAME = "nu_session"
 SECRET_FILE = ".ranking_secret"
@@ -103,7 +103,7 @@ class SessionManager:
     def _sign(self, payload: str) -> str:
         return hmac.new(self._secret, payload.encode(), hashlib.sha256).hexdigest()
 
-    def issue_token(self, ip: str = "") -> Tuple[str, str]:
+    def issue_token(self, ip: str = "") -> tuple[str, str]:
         """签发新会话：返回 (cookie 值, 会话 ID)，并登记 sessions 行"""
         session_id = secrets.token_urlsafe(16)
         now = time.time()
@@ -117,7 +117,7 @@ class SessionManager:
             )
         return token, session_id
 
-    def resolve_token(self, token: Optional[str]) -> Optional[str]:
+    def resolve_token(self, token: str | None) -> str | None:
         """校验 Cookie 值：先验签（compare_digest）再检查时效，有效返回会话 ID，否则 None"""
         if not token:
             return None
@@ -153,7 +153,7 @@ class SessionManager:
                 (session_id, song_id, quality, time.time()),
             )
 
-    def rank_top(self, size: int = RANK_SIZE) -> List[Dict[str, Any]]:
+    def rank_top(self, size: int = RANK_SIZE) -> list[dict[str, Any]]:
         """下载排行榜：窗口内独立会话数降序，并列按歌曲名排序，TOP size
 
         联查 root.db 的 songs 表取名称/歌手；已清理（无元数据）的歌曲不入榜。

@@ -1,4 +1,4 @@
-"""启动脚本自检脚本（无测试框架，直接运行）
+"""启动脚本自检（pytest 管理）
 
 覆盖范围：
 1. check_dependencies：当前环境全部依赖可导入
@@ -7,38 +7,33 @@
 4. check_port：空闲端口通过、被占用端口检出
 5. 端到端：真实运行 python start.py，轮询端口后请求 /health 并校验响应
 
-运行方式：.venv/bin/python tests/test_start_checks.py
-注意：端到端用例会真实占用 config.toml 配置的端口约数秒。
+运行方式：python -m pytest tests/ -v
+注意：端到端用例会真实占用 config.toml 配置的端口约数秒；端口被占用时自动跳过。
 """
 
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import tomllib
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+import pytest
 
 import start
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_dependencies() -> None:
     results = start.check_dependencies()
     assert all(ok for _, ok, _ in results), f"存在未安装依赖: {[n for n, ok, _ in results if not ok]}"
-    print("通过: 全部运行时依赖可导入")
 
 
-def _patch_config(path: Path):
-    start.CONFIG_FILE = str(path)
-
-
-def test_config_checks(tmp: Path) -> None:
+def test_config_checks(tmp: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 文件缺失
-    _patch_config(tmp / "missing.toml")
+    monkeypatch.setattr(start, "CONFIG_FILE", str(tmp / "missing.toml"))
     results, cfg = start.check_config()
     assert cfg is None and any(not ok for _, ok, _ in results)
     assert any("配置文件存在" in n and not ok for n, ok, _ in results)
@@ -46,7 +41,7 @@ def test_config_checks(tmp: Path) -> None:
     # 非法 TOML
     bad = tmp / "bad.toml"
     bad.write_text("port = [不是合法toml\n", encoding="utf-8")
-    _patch_config(bad)
+    monkeypatch.setattr(start, "CONFIG_FILE", str(bad))
     results, cfg = start.check_config()
     assert cfg is None and any("可解析" in n and not ok for n, ok, _ in results)
     try:
@@ -58,16 +53,16 @@ def test_config_checks(tmp: Path) -> None:
     # 合法模板
     good = tmp / "good.toml"
     good.write_text((ROOT / "config.example.toml").read_text(encoding="utf-8"), encoding="utf-8")
-    _patch_config(good)
+    monkeypatch.setattr(start, "CONFIG_FILE", str(good))
     results, cfg = start.check_config()
     assert cfg is not None and all(ok for _, ok, _ in results)
-    print("通过: 配置文件缺失/非法 TOML/合法模板三分支")
 
 
 def test_value_rules(tmp: Path) -> None:
     base = (ROOT / "config.example.toml").read_text(encoding="utf-8")
 
     import tomllib as _t
+
     from config_loader import _merge_defaults
 
     def values_with(override: dict) -> list:
@@ -90,7 +85,6 @@ def test_value_rules(tmp: Path) -> None:
         results = values_with(override)
         hit = [r for r in results if expect_name in r[0] and not r[1]]
         assert hit, f"未检出非法配置: {override!r}"
-    print(f"通过: {len(bad_cases)} 类非法配置值全部检出")
 
 
 def test_port_check() -> None:
@@ -106,7 +100,6 @@ def test_port_check() -> None:
         blocker.listen(1)
         name, ok, detail = start.check_port("127.0.0.1", free_port)
         assert not ok and "绑定失败" in detail
-    print("通过: 端口占用检测（空闲/占用两分支）")
 
 
 def test_end_to_end() -> None:
@@ -125,8 +118,7 @@ def test_end_to_end() -> None:
                 return False
 
     if port_open():
-        print("跳过: 端到端（配置端口已被占用，可能已有服务实例运行）")
-        return
+        pytest.skip("端到端：配置端口已被占用，可能已有服务实例运行")
 
     proc = subprocess.Popen(
         [sys.executable, "start.py"],
@@ -141,7 +133,6 @@ def test_end_to_end() -> None:
         with urllib.request.urlopen(f"http://{host}:{port}/health", timeout=5) as resp:
             body = resp.read().decode("utf-8")
             assert resp.status == 200 and '"success":true' in body.replace(" ", ""), body[:200]
-        print(f"通过: 端到端启动并请求 /health（http://{host}:{port}）")
     finally:
         proc.terminate()
         try:
@@ -150,22 +141,4 @@ def test_end_to_end() -> None:
             proc.kill()
             out, _ = proc.communicate()
     # 自检输出逐行包含检查项
-    assert "[启动检查]" in out and "通过" in out, "启动输出缺少逐项检查结果"
-    print("通过: 启动输出包含逐行检查结果")
-
-
-def main() -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="starttest_"))
-    try:
-        test_dependencies()
-        test_config_checks(tmp)
-        test_value_rules(tmp)
-        test_port_check()
-        test_end_to_end()
-        print("\n全部自检通过 ✔")
-    finally:
-        start.CONFIG_FILE = "config.toml"
-
-
-if __name__ == "__main__":
-    main()
+    assert "[启动检查]" in out and "通过" in out, "启动输出缺少逐行检查结果"

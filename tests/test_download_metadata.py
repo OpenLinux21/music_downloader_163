@@ -1,4 +1,4 @@
-"""下载与元数据自检脚本（无测试框架，直接运行）
+"""下载与元数据自检（pytest 管理）
 
 覆盖范围：
 1. 歌词嵌入实证（本地 ffmpeg/ffprobe，无上游）：mp3/flac/m4a 三种格式写入
@@ -6,24 +6,22 @@
 2. 限速器：_RateLimiter 平均速率收敛（200KB/s 传 400KB 约 2s）；不限速零等待
 3. 多线程分段下载：本地支持 Range 的 HTTP 服务器（206）→ 4 段并发拼接结果与源一致
 4. 回退单流：不支持 Range 的服务器（200）→ 自动回退，结果一致
-5. 端到端（真实上游，用户已授权）：347230 exhigh 限速 512KB/s + 多线程下载，
+5. 端到端（标记 upstream，默认跳过）：347230 exhigh 限速 512KB/s + 多线程下载，
    验证耗时下界、ffprobe 校验真实文件元数据/歌词/封面，路由缓存命中
 
-运行方式：.venv/bin/python tests/test_download_metadata.py
+运行方式：python -m pytest tests/ -v
+端到端上游用例须用户授权后显式运行：python -m pytest -m upstream
 """
 
 import json
 import shutil
 import subprocess
-import sys
-import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+import pytest
 
 from music_downloader import MusicDownloader, MusicInfo, _RateLimiter
 
@@ -68,30 +66,22 @@ def test_lyric_embedding(tmp: Path) -> None:
         pic_url="", duration=60, track_number=3, download_url="", file_type="",
         file_size=0, quality="standard", lyric=LYRIC,
     )
-    results = {}
+    summary = []
     for ext, codec_args in cases.items():
         src = _make_audio(tmp / f"src.{ext}", codec_args)
         dest = tmp / f"tagged.{ext}"
         shutil.copy2(src, dest)
         ok = dl._write_metadata_with_ffmpeg(dest, info)
         tags = _probe_tags(dest)
-        results[ext] = {"write_ok": ok, "tags": tags}
+        has_lyric = any(k.lower() == "lyrics" and str(v).strip() for k, v in tags.items() if k != "_streams")
+        has_title = any(k.lower() == "title" for k, v in tags.items() if k != "_streams")
+        # 基础元数据三格式必须全部成立；歌词按实测结果记录（mp3/flac/m4a 预期均支持）
+        summary.append((ext, ok, has_lyric, has_title))
 
-    print("\n[歌词嵌入实测结果]")
-    summary = []
-    for ext, r in results.items():
-        has_lyric = any(k.lower() == "lyrics" and str(v).strip() for k, v in r["tags"].items() if k != "_streams")
-        has_title = any(k.lower() == "title" for k, v in r["tags"].items() if k != "_streams")
-        has_cover_stream = "video" in r["tags"]["_streams"] and ext != "m4a" or (
-            ext == "m4a" and "video" in r["tags"]["_streams"])
-        print(f"  {ext}: 写入={r['write_ok']} 歌词tag={has_lyric} title={has_title} "
-              f"流={r['tags']['_streams']}")
-        summary.append((ext, has_lyric, has_title))
-    # 基础元数据三格式必须全部成立；歌词按实测结果记录（mp3/flac/m4a 预期均支持）
-    for ext, has_lyric, has_title in summary:
+    for ext, write_ok, has_lyric, has_title in summary:
+        assert write_ok, f"{ext} 元数据写入失败"
         assert has_title, f"{ext} 基础元数据写入失败"
         assert has_lyric, f"{ext} 歌词未嵌入（需核查 ffmpeg 行为）"
-    print("通过: 三种格式歌词与基础元数据嵌入（ffprobe 实证）")
 
 
 def test_rate_limiter() -> None:
@@ -107,7 +97,6 @@ def test_rate_limiter() -> None:
     for _ in range(20):
         unlimited.wait(chunk)
     assert time.monotonic() - t0 < 0.05
-    print(f"通过: 限速器（384KB@200KB/s 实测 {dt:.2f}s；不限速零等待）")
 
 
 class _RangeHandler(BaseHTTPRequestHandler):
@@ -171,11 +160,12 @@ def test_multi_thread_and_fallback(tmp: Path) -> None:
         assert dest2.read_bytes() == payload, "回退单流结果不一致"
     finally:
         server.shutdown()
-    print("通过: 多线程 Range 分段拼接与不支持 Range 自动回退")
 
 
-def test_end_to_end(tmp: Path) -> None:
-    """真实上游（用户已授权）：exhigh 限速 512KB/s + 多线程，验证耗时下界与元数据"""
+@pytest.mark.upstream
+def test_end_to_end() -> None:
+    """真实上游端到端（须用户授权，-m upstream 显式运行）：
+    exhigh 限速 512KB/s + 多线程，验证耗时下界与元数据/歌词/封面/缓存命中"""
     import main
     sm = main.api_service.storage
     dl = MusicDownloader(
@@ -208,20 +198,3 @@ def test_end_to_end(tmp: Path) -> None:
     client = TestClient(main.app)
     r = client.post("/download", json={"id": str(song_id), "quality": quality, "format": "json"})
     assert r.json()["data"]["cached"] is True
-    print(f"通过: 端到端（exhigh {size}B 限速 512KB/s 实测 {dt:.1f}s，元数据/歌词/封面/哈希命中均验证）")
-
-
-def main() -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="dlmeta_"))
-    try:
-        test_lyric_embedding(tmp)
-        test_rate_limiter()
-        test_multi_thread_and_fallback(tmp)
-        test_end_to_end(tmp)
-        print("\n全部自检通过 ✔")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-if __name__ == "__main__":
-    main()

@@ -15,7 +15,7 @@ import time
 import tomllib
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 CONFIG_FILE = "config.toml"
 
@@ -31,7 +31,7 @@ REQUIRED_MODULES = [
     ("qrcode", "qrcode"),
 ]
 
-CheckResult = Tuple[str, bool, str]
+CheckResult = tuple[str, bool, str]
 
 
 def _report(name: str, ok: bool, detail: str = "") -> None:
@@ -46,8 +46,8 @@ def _report(name: str, ok: bool, detail: str = "") -> None:
 
 # ----------- 检查 1：依赖安装 -----------
 
-def check_dependencies() -> List[CheckResult]:
-    results: List[CheckResult] = []
+def check_dependencies() -> list[CheckResult]:
+    results: list[CheckResult] = []
     for module, display in REQUIRED_MODULES:
         ok = find_spec(module) is not None
         detail = "" if ok else "未安装，请先执行 pip install -r requirements.txt"
@@ -57,11 +57,11 @@ def check_dependencies() -> List[CheckResult]:
 
 # ----------- 检查 2/3：配置文件与配置项 -----------
 
-def check_config() -> Tuple[List[CheckResult], Optional[Dict[str, Any]]]:
+def check_config() -> tuple[list[CheckResult], dict[str, Any] | None]:
     """检查配置文件存在性、可解析性与配置项合法性，返回（结果列表, 配置或 None）"""
     from config_loader import load_config
 
-    results: List[CheckResult] = []
+    results: list[CheckResult] = []
     if not Path(CONFIG_FILE).exists():
         results.append(("配置文件存在", False, f"未找到 {CONFIG_FILE}，请从 config.example.toml 复制生成"))
         return results, None
@@ -82,7 +82,7 @@ def _is_num(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def check_config_values(cfg: Dict[str, Any]) -> List[CheckResult]:
+def check_config_values(cfg: dict[str, Any]) -> list[CheckResult]:
     """逐项校验配置值的类型与取值范围（load_config 已合并默认值，缺键回落默认）"""
     server, cache = cfg.get("server", {}), cfg.get("cache", {})
     download, api = cfg.get("download", {}), cfg.get("api", {})
@@ -109,7 +109,7 @@ def check_config_values(cfg: Dict[str, Any]) -> List[CheckResult]:
          "每 IP 每小时次数，正整数"),
     ]
 
-    results: List[CheckResult] = []
+    results: list[CheckResult] = []
     for name, value, ok_fn, expect in rules:
         ok = ok_fn(value)
         detail = f"当前值 {value!r}，要求 {expect}" if not ok else ""
@@ -173,8 +173,9 @@ def run_all_checks() -> bool:
 
 def start_service() -> None:
     """初始化服务进程并启动 FastAPI/uvicorn 服务"""
-    import main  # 通过全部检查后才导入，避免带病初始化
     import uvicorn
+
+    import main  # 通过全部检查后才导入，避免带病初始化
 
     host, port = main.config.host, main.config.port
 

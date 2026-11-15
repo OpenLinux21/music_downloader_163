@@ -1,4 +1,4 @@
-"""哈希追踪与校验自检脚本（无测试框架，直接运行）
+"""哈希追踪与校验自检（pytest 管理）
 
 覆盖范围：
 1. compute_sha256 与 hashlib 单次计算一致
@@ -8,21 +8,18 @@
 5. 下载器集成：哈希一致 → cached=true 且不调 get_music_info（打桩断言）；
    哈希不一致 → invalidate + 走重新下载路径（get_music_info 打桩抛异常验证进入重下分支）
 6. 清理联动：到期删除歌曲时哈希记录一并清除
-7. 端到端（真实上游，用户已授权少量下载）：347230 lossless 未命中→登记哈希；
+7. 端到端（标记 upstream，默认跳过）：347230 lossless 未命中→登记哈希；
    二次请求命中校验通过；篡改 1 字节后重下并重新登记哈希
 
-运行方式：.venv/bin/python tests/test_sha256_tracking.py
+运行方式：python -m pytest tests/ -v
+端到端上游用例须用户授权后显式运行：python -m pytest -m upstream
 """
 
 import hashlib
-import shutil
-import sys
-import tempfile
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+import pytest
 
 from storage_manager import StorageManager
 
@@ -33,7 +30,6 @@ def test_sha256_correctness(tmp: Path) -> None:
     payload = b"hello-sha256" * 50000  # >1MB，覆盖分块读取路径
     f.write_bytes(payload)
     assert sm.compute_sha256(f) == hashlib.sha256(payload).hexdigest()
-    print("通过: compute_sha256 与 hashlib 一致（含 >1MB 分块）")
 
 
 def test_register_verify(tmp: Path) -> None:
@@ -57,7 +53,6 @@ def test_register_verify(tmp: Path) -> None:
     assert sm.verify_hash(f) is False
     sm.register_hash(f, song_id=1, quality="standard")
     assert sm.verify_hash(f) is True
-    print("通过: 登记/校验回环与篡改、无记录、缺失三分支")
 
 
 def test_invalidate(tmp: Path) -> None:
@@ -86,11 +81,10 @@ def test_invalidate(tmp: Path) -> None:
     with sm._connect_hash() as conn:
         left = {r["path"] for r in conn.execute("SELECT path FROM file_hashes")}
     assert left == {sm._rel_path(cover)}
-    print("通过: invalidate_file 删除音质文件/副本/行/哈希，保留歌曲元数据与封面歌词")
 
 
 def test_downloader_integration(tmp: Path) -> None:
-    from music_downloader import MusicDownloader, MusicInfo
+    from music_downloader import MusicDownloader
 
     dl = MusicDownloader(storage_dir=str(tmp / "s_dl"))
     calls = {"get_music_info": 0}
@@ -124,7 +118,6 @@ def test_downloader_integration(tmp: Path) -> None:
         assert "stub" in str(e)
     assert not f.exists(), "损坏文件应已被删除"
     assert dl.storage.get_cached_file(song_id, "standard") is None
-    print("通过: 命中校验（一致复用零上游 / 不一致失效重下分支）")
 
 
 def test_cleanup_removes_hashes(tmp: Path) -> None:
@@ -144,18 +137,19 @@ def test_cleanup_removes_hashes(tmp: Path) -> None:
     with sm._connect_hash() as conn:
         left = conn.execute("SELECT COUNT(*) AS c FROM file_hashes WHERE song_id = 4").fetchone()["c"]
     assert left == 0 and not f.exists()
-    print("通过: 清理联动删除哈希记录")
 
 
-def test_end_to_end(tmp: Path) -> None:
-    """真实上游端到端（用户已授权）：未命中登记 → 命中校验 → 篡改重下 → 再命中"""
+@pytest.mark.upstream
+def test_end_to_end() -> None:
+    """真实上游端到端（须用户授权，-m upstream 显式运行）：
+    未命中登记 → 命中校验 → 篡改重下 → 再命中"""
     import main
     sm = main.api_service.storage
     from fastapi.testclient import TestClient
     client = TestClient(main.app)
     song_id, quality = 347230, "lossless"
 
-    # 若此前存在该音质缓存（如重跑本脚本），清理以保证首次下载路径可测
+    # 若此前存在该音质缓存（如重跑本用例），清理以保证首次下载路径可测
     sm.invalidate_file(song_id, quality)
 
     r1 = client.post("/download", json={"id": str(song_id), "quality": quality, "format": "json"})
@@ -181,22 +175,3 @@ def test_end_to_end(tmp: Path) -> None:
 
     r4 = client.post("/download", json={"id": str(song_id), "quality": quality, "format": "json"})
     assert r4.json()["data"]["cached"] is True
-    print(f"通过: 端到端（登记→命中→篡改重下→再命中，文件 {main_path.name}）")
-
-
-def main() -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="shatest_"))
-    try:
-        test_sha256_correctness(tmp)
-        test_register_verify(tmp)
-        test_invalidate(tmp)
-        test_downloader_integration(tmp)
-        test_cleanup_removes_hashes(tmp)
-        test_end_to_end(tmp)
-        print("\n全部自检通过 ✔")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-if __name__ == "__main__":
-    main()

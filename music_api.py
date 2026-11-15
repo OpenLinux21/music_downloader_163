@@ -10,12 +10,12 @@
 """
 
 import json
-import urllib.parse
 import time
-from random import randrange
-from typing import Dict, List, Optional, Tuple, Any
-from hashlib import md5
+import urllib.parse
 from enum import Enum
+from hashlib import md5
+from random import randrange
+from typing import Any
 
 import requests
 from cryptography.hazmat.primitives import padding
@@ -40,7 +40,10 @@ class QualityLevel(Enum):
 class APIConstants:
     """API相关常量"""
     AES_KEY = b"e82ckenh8dichen8"
-    USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/2.10.2.200154'
+    USER_AGENT = (
+        'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/2.10.2.200154'
+    )
     REFERER = 'https://music.163.com/'
     
     # API URLs
@@ -88,7 +91,7 @@ class CryptoUtils:
         return CryptoUtils.hex_digest(CryptoUtils.hash_digest(text))
     
     @staticmethod
-    def encrypt_params(url: str, payload: Dict[str, Any]) -> str:
+    def encrypt_params(url: str, payload: dict[str, Any]) -> str:
         """加密请求参数"""
         url_path = urllib.parse.urlparse(url).path.replace("/eapi/", "/api/")
         digest = CryptoUtils.hash_hex_digest(f"nobody{url_path}use{json.dumps(payload)}md5forencrypt")
@@ -108,7 +111,7 @@ class HTTPClient:
     """HTTP客户端类"""
     
     @staticmethod
-    def post_request(url: str, params: str, cookies: Dict[str, str]) -> str:
+    def post_request(url: str, params: str, cookies: dict[str, str]) -> str:
         """发送POST请求并返回文本响应"""
         headers = {
             'User-Agent': APIConstants.USER_AGENT,
@@ -124,10 +127,10 @@ class HTTPClient:
             response.raise_for_status()
             return response.text
         except requests.RequestException as e:
-            raise APIException(f"HTTP请求失败: {e}")
+            raise APIException(f"HTTP请求失败: {e}") from None
     
     @staticmethod
-    def post_request_full(url: str, params: str, cookies: Dict[str, str]) -> requests.Response:
+    def post_request_full(url: str, params: str, cookies: dict[str, str]) -> requests.Response:
         """发送POST请求并返回完整响应对象"""
         headers = {
             'User-Agent': APIConstants.USER_AGENT,
@@ -143,7 +146,7 @@ class HTTPClient:
             response.raise_for_status()
             return response
         except requests.RequestException as e:
-            raise APIException(f"HTTP请求失败: {e}")
+            raise APIException(f"HTTP请求失败: {e}") from None
 
 
 class APIException(Exception):
@@ -158,7 +161,7 @@ class NeteaseAPI:
         self.http_client = HTTPClient()
         self.crypto_utils = CryptoUtils()
     
-    def get_song_url(self, song_id: int, quality: str, cookies: Dict[str, str]) -> Dict[str, Any]:
+    def get_song_url(self, song_id: int, quality: str, cookies: dict[str, str]) -> dict[str, Any]:
         """获取歌曲播放URL
         
         Args:
@@ -195,9 +198,9 @@ class NeteaseAPI:
             
             return result
         except (json.JSONDecodeError, KeyError) as e:
-            raise APIException(f"解析响应数据失败: {e}")
+            raise APIException(f"解析响应数据失败: {e}") from None
     
-    def get_song_detail(self, song_id: int) -> Dict[str, Any]:
+    def get_song_detail(self, song_id: int) -> dict[str, Any]:
         """获取歌曲详细信息
         
         Args:
@@ -220,11 +223,11 @@ class NeteaseAPI:
             
             return result
         except requests.RequestException as e:
-            raise APIException(f"获取歌曲详情请求失败: {e}")
+            raise APIException(f"获取歌曲详情请求失败: {e}") from None
         except json.JSONDecodeError as e:
-            raise APIException(f"解析歌曲详情响应失败: {e}")
+            raise APIException(f"解析歌曲详情响应失败: {e}") from None
     
-    def get_lyric(self, song_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+    def get_lyric(self, song_id: int, cookies: dict[str, str]) -> dict[str, Any]:
         """获取歌词信息
         
         Args:
@@ -265,11 +268,11 @@ class NeteaseAPI:
             
             return result
         except requests.RequestException as e:
-            raise APIException(f"获取歌词请求失败: {e}")
+            raise APIException(f"获取歌词请求失败: {e}") from None
         except json.JSONDecodeError as e:
-            raise APIException(f"解析歌词响应失败: {e}")
+            raise APIException(f"解析歌词响应失败: {e}") from None
     
-    def search_music(self, keywords: str, cookies: Dict[str, str], limit: int = 10) -> List[Dict[str, Any]]:
+    def search_music(self, keywords: str, cookies: dict[str, str], limit: int = 10) -> list[dict[str, Any]]:
         """搜索音乐
         
         Args:
@@ -311,11 +314,11 @@ class NeteaseAPI:
             
             return songs
         except requests.RequestException as e:
-            raise APIException(f"搜索请求失败: {e}")
+            raise APIException(f"搜索请求失败: {e}") from None
         except (json.JSONDecodeError, KeyError) as e:
-            raise APIException(f"解析搜索响应失败: {e}")
+            raise APIException(f"解析搜索响应失败: {e}") from None
     
-    def get_playlist_detail(self, playlist_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+    def get_playlist_detail(self, playlist_id: int, cookies: dict[str, str]) -> dict[str, Any]:
         """获取歌单详情
         
         Args:
@@ -376,11 +379,11 @@ class NeteaseAPI:
             
             return info
         except requests.RequestException as e:
-            raise APIException(f"获取歌单详情请求失败: {e}")
+            raise APIException(f"获取歌单详情请求失败: {e}") from None
         except (json.JSONDecodeError, KeyError) as e:
-            raise APIException(f"解析歌单详情响应失败: {e}")
+            raise APIException(f"解析歌单详情响应失败: {e}") from None
     
-    def get_album_detail(self, album_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+    def get_album_detail(self, album_id: int, cookies: dict[str, str]) -> dict[str, Any]:
         """获取专辑详情
         
         Args:
@@ -429,9 +432,9 @@ class NeteaseAPI:
             
             return info
         except requests.RequestException as e:
-            raise APIException(f"获取专辑详情请求失败: {e}")
+            raise APIException(f"获取专辑详情请求失败: {e}") from None
         except (json.JSONDecodeError, KeyError) as e:
-            raise APIException(f"解析专辑详情响应失败: {e}")
+            raise APIException(f"解析专辑详情响应失败: {e}") from None
     
     def netease_encrypt_id(self, id_str: str) -> str:
         """网易云加密图片ID算法
@@ -458,7 +461,7 @@ class NeteaseAPI:
         
         return result
     
-    def get_pic_url(self, pic_id: Optional[int], size: int = 300) -> str:
+    def get_pic_url(self, pic_id: int | None, size: int = 300) -> str:
         """获取网易云加密歌曲/专辑封面直链
         
         Args:
@@ -482,7 +485,7 @@ class QRLoginManager:
         self.http_client = HTTPClient()
         self.crypto_utils = CryptoUtils()
     
-    def generate_qr_key(self) -> Optional[str]:
+    def generate_qr_key(self) -> str | None:
         """生成二维码的key
         
         Returns:
@@ -509,9 +512,9 @@ class QRLoginManager:
             else:
                 raise APIException(f"生成二维码key失败: {result.get('message', '未知错误')}")
         except (json.JSONDecodeError, KeyError) as e:
-            raise APIException(f"解析二维码key响应失败: {e}")
+            raise APIException(f"解析二维码key响应失败: {e}") from None
     
-    def create_qr_login(self) -> Optional[str]:
+    def create_qr_login(self) -> str | None:
         """创建登录二维码并在控制台显示
         
         Returns:
@@ -541,7 +544,7 @@ class QRLoginManager:
             print(f"创建二维码失败: {e}")
             return None
     
-    def check_qr_login(self, unikey: str) -> Tuple[int, Dict[str, str]]:
+    def check_qr_login(self, unikey: str) -> tuple[int, dict[str, str]]:
         """检查二维码登录状态
         
         Args:
@@ -578,9 +581,9 @@ class QRLoginManager:
             
             return result.get('code', -1), cookie_dict
         except (json.JSONDecodeError, KeyError) as e:
-            raise APIException(f"解析登录状态响应失败: {e}")
+            raise APIException(f"解析登录状态响应失败: {e}") from None
     
-    def qr_login(self) -> Optional[str]:
+    def qr_login(self) -> str | None:
         """完整的二维码登录流程
         
         Returns:
@@ -615,49 +618,49 @@ class QRLoginManager:
 
 
 # 向后兼容的函数接口
-def url_v1(song_id: int, level: str, cookies: Dict[str, str]) -> Dict[str, Any]:
+def url_v1(song_id: int, level: str, cookies: dict[str, str]) -> dict[str, Any]:
     """获取歌曲URL（向后兼容）"""
     api = NeteaseAPI()
     return api.get_song_url(song_id, level, cookies)
 
 
-def name_v1(song_id: int) -> Dict[str, Any]:
+def name_v1(song_id: int) -> dict[str, Any]:
     """获取歌曲详情（向后兼容）"""
     api = NeteaseAPI()
     return api.get_song_detail(song_id)
 
 
-def lyric_v1(song_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+def lyric_v1(song_id: int, cookies: dict[str, str]) -> dict[str, Any]:
     """获取歌词（向后兼容）"""
     api = NeteaseAPI()
     return api.get_lyric(song_id, cookies)
 
 
-def search_music(keywords: str, cookies: Dict[str, str], limit: int = 10) -> List[Dict[str, Any]]:
+def search_music(keywords: str, cookies: dict[str, str], limit: int = 10) -> list[dict[str, Any]]:
     """搜索音乐（向后兼容）"""
     api = NeteaseAPI()
     return api.search_music(keywords, cookies, limit)
 
 
-def playlist_detail(playlist_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+def playlist_detail(playlist_id: int, cookies: dict[str, str]) -> dict[str, Any]:
     """获取歌单详情（向后兼容）"""
     api = NeteaseAPI()
     return api.get_playlist_detail(playlist_id, cookies)
 
 
-def album_detail(album_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+def album_detail(album_id: int, cookies: dict[str, str]) -> dict[str, Any]:
     """获取专辑详情（向后兼容）"""
     api = NeteaseAPI()
     return api.get_album_detail(album_id, cookies)
 
 
-def get_pic_url(pic_id: Optional[int], size: int = 300) -> str:
+def get_pic_url(pic_id: int | None, size: int = 300) -> str:
     """获取图片URL（向后兼容）"""
     api = NeteaseAPI()
     return api.get_pic_url(pic_id, size)
 
 
-def qr_login() -> Optional[str]:
+def qr_login() -> str | None:
     """二维码登录（向后兼容）"""
     manager = QRLoginManager()
     return manager.qr_login()
@@ -665,7 +668,7 @@ def qr_login() -> Optional[str]:
 
 # ============ Cookie 工具 ============
 
-def load_cookies() -> Dict[str, str]:
+def load_cookies() -> dict[str, str]:
     """读取 config.toml 中服务器默认 Cookie（server.default_cookie）并解析为 dict
 
     支持标准 ``NMTID=xxx; _ntes_nnid=xxx; ...`` 格式。
@@ -674,12 +677,12 @@ def load_cookies() -> Dict[str, str]:
     return parse_cookie_string(get_default_cookie())
 
 
-def parse_cookie_string(cookie_string: str) -> Dict[str, str]:
+def parse_cookie_string(cookie_string: str) -> dict[str, str]:
     """把 ``k1=v1; k2=v2`` 格式字符串解析为 dict
 
     支持 ``;`` 或 ``\\n`` 作为分隔符。
     """
-    cookies: Dict[str, str] = {}
+    cookies: dict[str, str] = {}
     if not cookie_string:
         return cookies
     cookie_string = cookie_string.strip()

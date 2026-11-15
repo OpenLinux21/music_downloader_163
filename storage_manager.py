@@ -38,7 +38,7 @@ import shutil
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # 清理周期与保留期默认值
 CLEANUP_INTERVAL_SECONDS = 3600
@@ -51,7 +51,7 @@ class StorageManager:
     def __init__(
         self,
         storage_dir: str | Path = "storage",
-        max_total_mb: Optional[float] = None,
+        max_total_mb: float | None = None,
         retention_days: int = DEFAULT_RETENTION_DAYS,
     ):
         """
@@ -142,8 +142,8 @@ class StorageManager:
                 digest.update(chunk)
         return digest.hexdigest()
 
-    def register_hash(self, path: Path, song_id: Optional[int] = None,
-                      quality: Optional[str] = None) -> str:
+    def register_hash(self, path: Path, song_id: int | None = None,
+                      quality: str | None = None) -> str:
         """计算文件哈希并登记/更新（任何文件进入 storage 时调用）"""
         sha = self.compute_sha256(path)
         with self._connect_hash() as conn:
@@ -220,7 +220,7 @@ class StorageManager:
             return preferred
         return self.song_dir(song_id) / f"{base}.{quality}{ext}"
 
-    def _query_path_owner(self, song_id: int, path: Path) -> Optional[str]:
+    def _query_path_owner(self, song_id: int, path: Path) -> str | None:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT quality FROM files WHERE song_id = ? AND path = ?",
@@ -234,7 +234,7 @@ class StorageManager:
 
     # ----------- 缓存查询与访问计数 -----------
 
-    def get_cached_file(self, song_id: int, quality: str) -> Optional[Path]:
+    def get_cached_file(self, song_id: int, quality: str) -> Path | None:
         """查询 (song_id, quality) 主存储缓存：DB 有记录且文件真实存在才算命中
         （专辑副本不作为命中对象，仅计入总大小）"""
         with self._connect() as conn:
@@ -247,7 +247,7 @@ class StorageManager:
         path = self.storage_dir / row["path"]
         return path if path.is_file() else None
 
-    def song_with_file(self, song_id: int, quality: str) -> Optional[Dict[str, Any]]:
+    def song_with_file(self, song_id: int, quality: str) -> dict[str, Any] | None:
         """联查歌曲元数据与指定音质文件记录（缓存命中时供响应组装，避免重复上游调用）"""
         with self._connect() as conn:
             song = conn.execute(
@@ -277,7 +277,7 @@ class StorageManager:
 
     # ----------- 登记与查询 -----------
 
-    def register_song(self, info: Dict[str, Any]) -> None:
+    def register_song(self, info: dict[str, Any]) -> None:
         """登记/更新歌曲元数据（重复下载同一首歌时保留累计访问量）"""
         now = time.time()
         with self._connect() as conn:
@@ -319,7 +319,7 @@ class StorageManager:
                  time.time(), int(is_copy)),
             )
 
-    def song_stats(self, song_id: int) -> Optional[Dict[str, Any]]:
+    def song_stats(self, song_id: int) -> dict[str, Any] | None:
         """查询单首歌曲的元数据与访问量（推荐/排行功能的基础查询）"""
         with self._connect() as conn:
             row = conn.execute(
@@ -327,7 +327,7 @@ class StorageManager:
             ).fetchone()
         return dict(row) if row else None
 
-    def cached_qualities(self, song_id: int) -> List[Dict[str, Any]]:
+    def cached_qualities(self, song_id: int) -> list[dict[str, Any]]:
         """列出已缓存音质版本及其文件大小（推荐功能展示用）"""
         with self._connect() as conn:
             rows = conn.execute(
@@ -340,7 +340,7 @@ class StorageManager:
 
     NAME_SIMILAR_THRESHOLD = 0.55  # 歌名近似判定阈值（difflib 相似度）
 
-    def recommend_for(self, song_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+    def recommend_for(self, song_id: int, limit: int = 5) -> list[dict[str, Any]]:
         """基于 root.db 特征数据的智能推荐（每次最多 limit 首，默认 5）
 
         打分维度（仅候选缓存中已有的歌曲，排除自身）：
@@ -371,7 +371,7 @@ class StorageManager:
                 (song_id,),
             ).fetchall()
 
-        scored: List[Tuple[float, int, int, sqlite3.Row]] = []
+        scored: list[tuple[float, int, int, sqlite3.Row]] = []
         for r in rows:
             score = 0.0
             cand_artists = set(filter(None, (r["artists"] or "").replace("/", " ").split()))
@@ -398,7 +398,7 @@ class StorageManager:
                     break
                 picked.append((0.0, int(r["visit_count"]), int(r["song_id"]), r))
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for _score, _visits, sid, _r in picked[:limit]:
             qualities = [
                 {"quality": q["quality"], "ext": q["ext"], "size": q["size"], "cached": True}
@@ -438,7 +438,7 @@ class StorageManager:
             shutil.rmtree(album_dir, ignore_errors=True)
         return freed
 
-    def cleanup(self, now: Optional[float] = None) -> Dict[str, Any]:
+    def cleanup(self, now: float | None = None) -> dict[str, Any]:
         """执行清理：到期删除 + 超限淘汰，返回统计供日志输出"""
         now = now if now is not None else time.time()
         removed_expired = 0
@@ -510,7 +510,7 @@ class StorageManager:
         path.write_bytes(data)
         return path
 
-    def save_lyric(self, song_id: int, lyric: str) -> Optional[Path]:
+    def save_lyric(self, song_id: int, lyric: str) -> Path | None:
         """保存歌词（空内容跳过）"""
         if not lyric or not lyric.strip():
             return None

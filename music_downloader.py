@@ -30,16 +30,15 @@ from dataclasses import dataclass
 from enum import Enum
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import aiofiles
 import aiohttp
 import requests
 
-from music_api import APIException, NeteaseAPI, load_cookies
 from logger import get_logger
+from music_api import APIException, NeteaseAPI, load_cookies
 from storage_manager import StorageManager
-
 
 # ============ 类型定义 ============
 
@@ -71,7 +70,7 @@ class MusicInfo:
     name: str
     artists: str
     album: str
-    album_id: Optional[int]
+    album_id: int | None
     pic_url: str
     duration: int
     track_number: int
@@ -87,10 +86,10 @@ class MusicInfo:
 class DownloadResult:
     """下载结果数据类"""
     success: bool
-    file_path: Optional[str] = None
+    file_path: str | None = None
     file_size: int = 0
     error_message: str = ""
-    music_info: Optional[MusicInfo] = None
+    music_info: MusicInfo | None = None
     cached: bool = False  # 是否命中缓存复用
 
 
@@ -163,8 +162,8 @@ class MusicDownloader:
         self,
         storage_dir: str = "storage",
         max_concurrent: int = 3,
-        ffmpeg_path: Optional[str] = None,
-        storage_manager: Optional[StorageManager] = None,
+        ffmpeg_path: str | None = None,
+        storage_manager: StorageManager | None = None,
         multi_thread: bool = False,
         speed_limit_kb: float = 0,
     ):
@@ -233,7 +232,7 @@ class MusicDownloader:
 
         return ".mp3"
 
-    def _resolve_ffmpeg(self) -> Optional[str]:
+    def _resolve_ffmpeg(self) -> str | None:
         """懒加载解析 ffmpeg 路径
 
         每次写入前调用一次：若启动时未检测到，但中途已安装，下一次就能用。
@@ -248,7 +247,7 @@ class MusicDownloader:
     # ----------- 信息获取 -----------
 
     def get_music_info(self, music_id: int, quality: str = "standard",
-                       cookies: Optional[Dict[str, str]] = None) -> MusicInfo:
+                       cookies: dict[str, str] | None = None) -> MusicInfo:
         """获取音乐详细信息（同步）
 
         cookies: 请求级用户凭据（None 时使用 config.toml 默认 Cookie），
@@ -297,9 +296,9 @@ class MusicDownloader:
             )
 
         except APIException as e:
-            raise DownloadException(f"API调用失败: {e}")
+            raise DownloadException(f"API调用失败: {e}") from None
         except Exception as e:
-            raise DownloadException(f"获取音乐信息时发生错误: {e}")
+            raise DownloadException(f"获取音乐信息时发生错误: {e}") from None
 
     # ----------- 文件路径 -----------
 
@@ -361,7 +360,7 @@ class MusicDownloader:
         )
         if use_multi:
             part_size = total_size // threads
-            ranges: List[Tuple[int, int]] = []
+            ranges: list[tuple[int, int]] = []
             for i in range(threads):
                 start = i * part_size
                 end = (total_size - 1) if i == threads - 1 else (start + part_size - 1)
@@ -371,7 +370,7 @@ class MusicDownloader:
                 with ThreadPoolExecutor(max_workers=threads) as pool:
                     futures = [
                         pool.submit(self._download_ranged, url, s, e, pf, limiter)
-                        for (s, e), pf in zip(ranges, part_files)
+                        for (s, e), pf in zip(ranges, part_files, strict=True)
                     ]
                     sizes = [fut.result() for fut in futures]
                 if sum(sizes) != total_size:
@@ -397,7 +396,7 @@ class MusicDownloader:
         self,
         music_id: int,
         quality: str = "standard",
-        cookies: Optional[Dict[str, str]] = None,
+        cookies: dict[str, str] | None = None,
     ) -> DownloadResult:
         """同步下载音乐到本地存储（命中缓存直接复用；cookies 为请求级用户凭据，见 get_music_info）"""
         try:
@@ -463,7 +462,7 @@ class MusicDownloader:
         })
 
         # 封面下载一次：既落盘 storage/<song_id>/cover.jpg，也供 ffmpeg 嵌入复用
-        cover_local: Optional[Path] = None
+        cover_local: Path | None = None
         if music_info.pic_url:
             try:
                 pic_resp = requests.get(music_info.pic_url, timeout=10)
@@ -507,7 +506,7 @@ class MusicDownloader:
             except Exception as e:
                 self.logger.warning(f"专辑副本保存失败（不影响主文件）: {e}")
 
-    def _music_info_from_record(self, record: Dict[str, Any], quality: str) -> MusicInfo:
+    def _music_info_from_record(self, record: dict[str, Any], quality: str) -> MusicInfo:
         """用 root.db 记录构建 MusicInfo（缓存命中时避免重复上游调用）"""
         return MusicInfo(
             id=int(record["song_id"]),
@@ -530,7 +529,7 @@ class MusicDownloader:
         self,
         music_id: int,
         quality: str = "standard",
-        cookies: Optional[Dict[str, str]] = None,
+        cookies: dict[str, str] | None = None,
     ) -> DownloadResult:
         """异步下载音乐到本地存储（命中缓存直接复用；cookies 语义同同步路径）"""
         try:
@@ -585,7 +584,7 @@ class MusicDownloader:
         self,
         music_id: int,
         quality: str = "standard",
-    ) -> Tuple[bool, BytesIO, MusicInfo]:
+    ) -> tuple[bool, BytesIO, MusicInfo]:
         """下载音乐到内存"""
         try:
             music_info = self.get_music_info(music_id, quality)
@@ -596,17 +595,17 @@ class MusicDownloader:
         except DownloadException:
             raise
         except requests.RequestException as e:
-            raise DownloadException(f"下载到内存失败: {e}")
+            raise DownloadException(f"下载到内存失败: {e}") from None
         except Exception as e:
-            raise DownloadException(f"内存下载过程中发生错误: {e}")
+            raise DownloadException(f"内存下载过程中发生错误: {e}") from None
 
     # ----------- 批量下载 -----------
 
     async def download_batch_async(
         self,
-        music_ids: List[int],
+        music_ids: list[int],
         quality: str = "standard",
-    ) -> List[DownloadResult]:
+    ) -> list[DownloadResult]:
         """批量并发下载"""
         semaphore = asyncio.Semaphore(self.max_concurrent)
 
@@ -617,7 +616,7 @@ class MusicDownloader:
         tasks = [_one(mid) for mid in music_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        processed: List[DownloadResult] = []
+        processed: list[DownloadResult] = []
         for i, r in enumerate(results):
             if isinstance(r, Exception):
                 processed.append(DownloadResult(
@@ -634,7 +633,7 @@ class MusicDownloader:
         self,
         music_id: int,
         quality: str = "standard",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """查询下载进度"""
         try:
             music_info = self.get_music_info(music_id, quality)
@@ -679,7 +678,7 @@ class MusicDownloader:
         self,
         file_path: Path,
         music_info: MusicInfo,
-        cover_local: Optional[Path] = None,
+        cover_local: Path | None = None,
     ) -> bool:
         """使用 ffmpeg 写入音频元数据
 
@@ -709,7 +708,7 @@ class MusicDownloader:
             file_path.stem + ".tagging" + file_path.suffix
         )
         # 临时封面文件
-        cover_tmp: Optional[str] = None
+        cover_tmp: str | None = None
 
         try:
             # 封面来源：优先使用已落盘文件；无则下载到临时文件
@@ -730,7 +729,7 @@ class MusicDownloader:
             # 构造 ffmpeg 命令
             # 顺序: global opts -> -i input1 -> -i input2 -> metadata -> mapping -> -f format -> output
             output_format = EXT_TO_FFMPEG_FORMAT.get(file_ext, "")
-            cmd: List[str] = [
+            cmd: list[str] = [
                 ffmpeg_path, "-y", "-loglevel", "error",
                 "-i", str(file_path),
             ]
@@ -807,7 +806,7 @@ class MusicDownloader:
                 except OSError:
                     pass
 
-    def _build_format_args(self, file_ext: str, has_cover: bool) -> List[str]:
+    def _build_format_args(self, file_ext: str, has_cover: bool) -> list[str]:
         """根据文件格式构造 mapping / 编码参数"""
         if file_ext == ".mp3":
             # MP3: 封面通过 ID3v2 APIC 帧写入
