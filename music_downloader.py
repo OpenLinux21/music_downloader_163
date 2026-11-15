@@ -32,6 +32,7 @@ import aiohttp
 import requests
 
 from music_api import APIException, NeteaseAPI, load_cookies
+from logger import get_logger
 
 
 # ============ 类型定义 ============
@@ -141,13 +142,14 @@ class MusicDownloader:
         self.download_dir = Path(download_dir)
         self.download_dir.mkdir(exist_ok=True)
         self.max_concurrent = max_concurrent
+        self.logger = get_logger("DOWNLOADER")
 
         self.api = NeteaseAPI()
 
         # ffmpeg 路径缓存：启动时检测一次，写入时还会再懒加载一次
         self.ffmpeg_path = ffmpeg_path or shutil.which("ffmpeg")
         if not self.ffmpeg_path:
-            print("警告: 未检测到 ffmpeg，写入元数据功能将不可用")
+            self.logger.warning("未检测到 ffmpeg，写入元数据功能将不可用")
 
     # ----------- 工具方法 -----------
 
@@ -211,7 +213,6 @@ class MusicDownloader:
             cookies = load_cookies()
 
             url_result = self.api.get_song_url(music_id, quality, cookies)
-            print(url_result)
             if not url_result.get("data") or not url_result["data"]:
                 raise DownloadException(f"无法获取音乐ID {music_id} 的播放链接")
 
@@ -464,16 +465,16 @@ class MusicDownloader:
         """
         ffmpeg_path = self._resolve_ffmpeg()
         if not ffmpeg_path:
-            print("跳过元数据写入: ffmpeg 不可用")
+            self.logger.warning("跳过元数据写入: ffmpeg 不可用")
             return False
 
         file_ext = file_path.suffix.lower()
         if file_ext not in METADATA_FORMATS:
-            print(f"跳过元数据写入: 不支持的格式 {file_ext}")
+            self.logger.warning(f"跳过元数据写入: 不支持的格式 {file_ext}")
             return False
 
         if not file_path.exists():
-            print(f"跳过元数据写入: 文件不存在 {file_path}")
+            self.logger.warning(f"跳过元数据写入: 文件不存在 {file_path}")
             return False
 
         # 临时输出文件：保留原扩展名在最后，便于 ffmpeg 识别 muxer
@@ -495,7 +496,7 @@ class MusicDownloader:
                     with open(cover_tmp, "wb") as cf:
                         cf.write(pic_resp.content)
                 except Exception as e:
-                    print(f"封面下载失败，跳过封面写入: {e}")
+                    self.logger.warning(f"封面下载失败，跳过封面写入: {e}")
                     cover_tmp = None
 
             # 构造 ffmpeg 命令
@@ -544,22 +545,23 @@ class MusicDownloader:
             if result.returncode == 0 and tmp_output.exists():
                 # 原子替换原文件
                 shutil.move(str(tmp_output), str(file_path))
+                self.logger.info(f"元数据写入完成: {file_path.name}")
                 return True
 
-            print(
+            self.logger.error(
                 f"ffmpeg 写入元数据失败: "
                 f"{(result.stderr or result.stdout or '').strip()}"
             )
             return False
 
         except subprocess.TimeoutExpired:
-            print("ffmpeg 执行超时")
+            self.logger.error("ffmpeg 执行超时")
             return False
         except FileNotFoundError:
-            print(f"ffmpeg 可执行文件未找到: {ffmpeg_path}")
+            self.logger.error(f"ffmpeg 可执行文件未找到: {ffmpeg_path}")
             return False
         except Exception as e:
-            print(f"ffmpeg 写入元数据异常: {e}")
+            self.logger.error(f"ffmpeg 写入元数据异常: {e}")
             return False
         finally:
             # 清理封面临时文件

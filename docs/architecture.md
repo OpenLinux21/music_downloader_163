@@ -19,6 +19,7 @@ Netease_url/
 ├── music_downloader.py     # 音乐下载器：同步/异步/批量下载、ffmpeg 元数据写入、CLI 入口
 ├── qr_login.py             # 二维码登录 CLI 工具：Cookie 读写/备份/校验（与 music_api 存在接口不匹配，见知识库）
 ├── config_loader.py        # 配置读取模块：tomllib 解析 config.toml、默认值合并、Cookie 读写
+├── logger.py               # 统一日志模块：GIN 风格格式（控制台彩色 + logs/service.log 轮转）
 ├── config.example.toml     # 配置模板（提交 Git，Cookie 留空）
 ├── config.toml             # 本地配置（含服务器默认 Cookie，已被 .gitignore 排除，禁止提交）
 ├── templates/
@@ -30,7 +31,7 @@ Netease_url/
 ├── .env                    # 环境变量（LEVEL/MODE/URL，当前均不被程序读取）
 ├── README.md / 使用文档.md  # 面向使用者的说明（部分内容与代码存在出入，以本文档体系为准）
 ├── downloads/              # 下载产物目录（运行时生成，未被 .gitignore 覆盖）
-└── music_api.log           # 服务日志（运行时生成，已被 .gitignore 覆盖）
+└── logs/                   # 统一日志目录（service.log + 轮转备份，已被 .gitignore 覆盖）
 ```
 
 ## 3. 技术栈
@@ -45,6 +46,7 @@ Netease_url/
 | 音频处理 | ffmpeg（系统二进制，非 Python 包；Docker 内通过 `apk add ffmpeg` 安装） | `Dockerfile`、`music_downloader.py` |
 | 前端 | jQuery 3.7.1、Bootstrap 5.1.3、APlayer 1.10.1（均加载自 `mirrors.sustech.edu.cn` CDN） | `templates/index.html` |
 | 配置 | TOML，标准库 `tomllib` 解析；`config.toml` 为唯一配置来源（缺省回落内置默认值） | `config_loader.py` |
+| 日志 | 标准库 `logging` + 自研 GIN 风格 formatter：控制台（ANSI 着色）+ `logs/service.log`（5MB 轮转 ×3，无着色） | `logger.py` |
 
 依赖全部在 `requirements.txt` 中固定版本，无数据库驱动、无 ORM、无任务队列、无测试框架、无 CI 配置。
 
@@ -102,6 +104,6 @@ Netease_url/
 | `config.toml` | 服务配置（绑定地址/端口/缓存上限/下载开关/限速）与服务器默认 Cookie（`server.default_cookie`） | 从 `config.example.toml` 复制后人工填写，或 `qr_login.py` 登录写入；Git 不跟踪 |
 | `cookie.backup.<suffix>.<时间戳>.txt` | Cookie 覆盖/清除前的备份 | `qr_login.py` 的 `_backup_cookie()` |
 | `downloads/` | 下载的音乐文件与 ffmpeg 封面临时文件 | 服务运行时生成 |
-| `music_api.log` | Web 服务日志（控制台 + 文件双写） | `main.py` 的 `_setup_logger()` |
+| `logs/service.log` | Web 服务与下载器统一日志（GIN 风格） | `logger.py`（控制台 + 文件各一份，文件 5MB 轮转保留 3 份） |
 
 详细数据流见 `docs/data-flow.md`；部署方式见 `docs/deployment.md`。

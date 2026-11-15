@@ -35,7 +35,8 @@ Web 服务仅使用其中的 `download_music_file` 同步路径；异步/内存/
 MusicDownloader(download_dir="downloads", max_concurrent=3, ffmpeg_path=None)
 ```
 
-- 构造时创建下载目录、内部新建一份 `NeteaseAPI`、用 `shutil.which("ffmpeg")` 做首次检测（缺失仅打印警告，不报错）。
+- 构造时创建下载目录、内部新建一份 `NeteaseAPI`、用 `shutil.which("ffmpeg")` 做首次检测（缺失仅经 `DOWNLOADER` 日志器告警，不报错）。
+- 日志：模块内事件统一经 `logger.get_logger("DOWNLOADER")` 输出（GIN 风格），CLI 入口（`__main__`）的交互输出仍为 print。
 - `_resolve_ffmpeg()`：每次写元数据前懒加载重试并回写缓存，支持服务运行中途安装 ffmpeg。
 - `_sanitize_filename()`：替换 `<>:"/\|?*` 为 `_`、去首尾空格与点、超 200 字符截断、空串回退 `unknown`。
 - `_determine_file_extension()` 优先级：API `type` > URL 后缀（.flac/.mp3/.m4a|.mp4）> Content-Type（flac/mpeg|mp3/mp4|m4a）> 默认 `.mp3`。
@@ -43,7 +44,7 @@ MusicDownloader(download_dir="downloads", max_concurrent=3, ffmpeg_path=None)
 
 ## 4. 信息获取 `get_music_info(music_id, quality)`
 
-执行顺序：`load_cookies()` → `api.get_song_url()`（含调试残留 `print(url_result)`，已知问题 #6）→ `api.get_song_detail()` → `api.get_lyric()` → 组装 `MusicInfo`。任一环节失败抛 `DownloadException`。
+执行顺序：`load_cookies()` → `api.get_song_url()` → `api.get_song_detail()` → `api.get_lyric()` → 组装 `MusicInfo`。任一环节失败抛 `DownloadException`。（原调试残留 `print(url_result)` 已于 2026-11-15 移除，知识库已知问题 #6 已修复）
 
 ## 5. 四种下载方式
 
@@ -66,12 +67,12 @@ MusicDownloader(download_dir="downloads", max_concurrent=3, ffmpeg_path=None)
 
 完整流程图与各格式参数表见 `docs/data-flow.md` 第 5 节，此处补充实现约束：
 
-1. **前置检查**：ffmpeg 可解析、扩展名 ∈ `METADATA_FORMATS`、文件存在；任一不满足直接返回 `False` 并打印原因。
+1. **前置检查**：ffmpeg 可解析、扩展名 ∈ `METADATA_FORMATS`、文件存在；任一不满足直接返回 `False` 并经 `DOWNLOADER` 日志器告警。
 2. **封面**：有 `pic_url` 时下载为 `download_dir` 下 `mkstemp` 临时 `.jpg`；下载失败降级为无封面继续。
 3. **命令构造顺序**：全局选项 → `-i` 音频 →（可选）`-i` 封面 → `-metadata` 序列 → 格式专属参数 → `-f` muxer（必须位于 `-i` 之后作为输出选项）→ 输出文件 `原名.tagging.原扩展名`。
 4. **写入的元数据键**：`title`、`artist`、`album`、`album_artist`、`comment`（固定为 `Downloaded from Netease Cloud Music`）、`track`/`tracktotal`（`track_number > 0` 时，两者同值）。
 5. **原子性**：`subprocess.run` 成功且临时文件存在时 `shutil.move` 替换原文件；超时 120 秒；`finally` 中清理封面临时文件与残留 `.tagging` 文件。
-6. **失败语义**：一切失败仅打印警告返回 `False`，调用方（下载流程）不受影响。
+6. **失败语义**：一切失败仅经 `DOWNLOADER` 日志器告警（WARNING/ERROR）并返回 `False`，调用方（下载流程）不受影响。
 
 ## 8. 命令行入口（CLI）
 

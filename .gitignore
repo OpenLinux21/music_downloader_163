@@ -11,6 +11,9 @@ __pycache__
 
 music_api.log
 
+# 统一日志（logger.py 轮转写）
+logs/
+
 # 本地配置（含服务器默认 Cookie 等凭据，禁止提交）
 config.toml
 

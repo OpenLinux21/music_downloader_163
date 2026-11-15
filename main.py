@@ -8,7 +8,6 @@
 - 健康检查
 """
 
-import logging
 import sys
 import time
 import traceback
@@ -27,6 +26,7 @@ try:
     )
     from music_downloader import MusicDownloader, DownloadException, AudioFormat
     from config_loader import get_config
+    from logger import get_logger, log_request, quiet_http_server_logs
 except ImportError as e:
     print(f"导入模块失败: {e}")
     print("请确保所有依赖模块存在且可用")
@@ -79,7 +79,7 @@ class MusicAPIService:
     
     def __init__(self, config: APIConfig):
         self.config = config
-        self.logger = self._setup_logger()
+        self.logger = get_logger("SERVER", self.config.log_level)
         self.netease_api = NeteaseAPI()
         self.downloader = MusicDownloader()
 
@@ -88,34 +88,7 @@ class MusicAPIService:
         self.downloads_path.mkdir(exist_ok=True)
 
         self.logger.info(f"音乐API服务初始化完成，下载目录: {self.downloads_path.absolute()}")
-    
-    def _setup_logger(self) -> logging.Logger:
-        """设置日志记录器"""
-        logger = logging.getLogger('music_api')
-        logger.setLevel(getattr(logging, self.config.log_level.upper()))
-        
-        if not logger.handlers:
-            # 控制台处理器
-            console_handler = logging.StreamHandler()
-            console_formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            console_handler.setFormatter(console_formatter)
-            logger.addHandler(console_handler)
-            
-            # 文件处理器
-            try:
-                file_handler = logging.FileHandler('music_api.log', encoding='utf-8')
-                file_formatter = logging.Formatter(
-                    '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
-                )
-                file_handler.setFormatter(file_formatter)
-                logger.addHandler(file_handler)
-            except Exception as e:
-                logger.warning(f"无法创建日志文件: {e}")
-        
-        return logger
-    
+
     def _get_cookies(self) -> Dict[str, str]:
         """从 config.toml 读取服务器默认 Cookie 并解析为 dict"""
         try:
@@ -213,24 +186,27 @@ api_service = MusicAPIService(config)
 
 @app.before_request
 def before_request():
-    """请求前处理"""
-    # 记录请求信息
-    api_service.logger.info(
-        f"{request.method} {request.path} - IP: {request.remote_addr} - "
-        f"User-Agent: {request.headers.get('User-Agent', 'Unknown')}"
-    )
+    """请求前处理：记录起始时间供请求行耗时统计"""
+    request.environ["req_start"] = time.perf_counter()
 
 
 @app.after_request
 def after_request(response: Response) -> Response:
-    """请求后处理 - 设置CORS头"""
+    """请求后处理 - 设置CORS头并输出 GIN 风格请求行"""
     response.headers.add('Access-Control-Allow-Origin', config.cors_origins)
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
     response.headers.add('Access-Control-Max-Age', '3600')
-    
-    # 记录响应信息
-    api_service.logger.info(f"响应状态: {response.status_code}")
+
+    start = request.environ.get("req_start")
+    log_request(
+        api_service.logger,
+        response.status_code,
+        start if start is not None else time.perf_counter(),
+        request.remote_addr or "-",
+        request.method,
+        request.path,
+    )
     return response
 
 
@@ -648,6 +624,7 @@ def api_info():
 def start_api_server():
     """启动API服务器"""
     try:
+        quiet_http_server_logs()  # 压制 Werkzeug 自带请求日志，避免重复
         print("\n" + "="*60)
         print("🚀 网易云音乐API服务启动中...")
         print("="*60)
