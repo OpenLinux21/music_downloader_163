@@ -22,3 +22,7 @@ cookie.txt
 cookie.txt.backup.*
 cookie.txt.logout.*
 cookie.backup.*.txt
+
+# 运行产物（音乐存储与历史下载产物，禁止提交）
+storage/
+downloads/

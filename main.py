@@ -25,6 +25,7 @@ try:
         load_cookies,
     )
     from music_downloader import MusicDownloader, DownloadException, AudioFormat
+    from storage_manager import StorageManager
     from config_loader import get_config
     from logger import get_logger, log_request
 except ImportError as e:
@@ -36,10 +37,11 @@ except ImportError as e:
 @dataclass
 class APIConfig:
     """API配置类"""
-    host: str = '0.0.0.0'
+    host: str = '127.0.0.1'
     port: int = 5000
     debug: bool = False
-    downloads_dir: str = 'downloads'
+    storage_dir: str = 'storage'
+    max_cache_mb: float = 8192  # 本地缓存大小上限（MB），读自 config.toml
     max_file_size: int = 500 * 1024 * 1024  # 500MB
     request_timeout: int = 30
     log_level: str = 'INFO'
@@ -81,13 +83,17 @@ class MusicAPIService:
         self.config = config
         self.logger = get_logger("SERVER", self.config.log_level)
         self.netease_api = NeteaseAPI()
-        self.downloader = MusicDownloader()
 
-        # 创建下载目录
-        self.downloads_path = Path(config.downloads_dir)
-        self.downloads_path.mkdir(exist_ok=True)
+        # 存储管理器：按歌曲 ID 分类存储，缓存上限读自 config.toml，启动清理守护线程
+        self.storage = StorageManager(
+            self.config.storage_dir,
+            max_total_mb=float(self.config.max_cache_mb),
+        )
+        self.storage_path = self.storage.storage_dir
+        self.downloader = MusicDownloader(storage_manager=self.storage)
 
-        self.logger.info(f"音乐API服务初始化完成，下载目录: {self.downloads_path.absolute()}")
+        self.logger.info(f"音乐API服务初始化完成，存储目录: {self.storage_path.resolve()}")
+        self.storage.start_cleanup_daemon()
 
     def _get_cookies(self) -> Dict[str, str]:
         """从 config.toml 读取服务器默认 Cookie 并解析为 dict"""
@@ -174,11 +180,12 @@ class MusicAPIService:
             return {}
 
 
-# 创建Flask应用和服务实例（绑定地址/端口读自 config.toml）
+# 创建Flask应用和服务实例（绑定地址/端口/缓存上限读自 config.toml）
 _cfg = get_config()
 config = APIConfig(
     host=str(_cfg["server"]["host"]),
     port=int(_cfg["server"]["port"]),
+    max_cache_mb=float(_cfg["cache"]["max_size_mb"]),
 )
 app = Flask(__name__)
 api_service = MusicAPIService(config)
@@ -248,7 +255,7 @@ def health_check():
             'timestamp': int(time.time()) if 'time' in sys.modules else None,
             'cookie_status': cookie_status,
             'cookie_count': len(cookies),
-            'downloads_dir': str(api_service.downloads_path.absolute()),
+            'storage_dir': str(api_service.storage_path.resolve()),
             'version': '2.0.0'
         }
 
@@ -467,112 +474,86 @@ def get_album():
 @app.route('/download', methods=['GET', 'POST'])
 @app.route('/Download', methods=['GET', 'POST'])  # 向后兼容
 def download_music_api():
-    """下载音乐API"""
+    """下载音乐API
+
+    下载链路统一委托下载器（内部一次性获取链接/详情/歌词，不再重复调用上游）；
+    以 (song_id, quality) 为缓存键，命中直接复用文件并累加歌曲访问量。
+    """
     try:
         # 获取请求参数
         data = api_service._safe_get_request_data()
         music_id = data.get('id')
         quality = data.get('quality', 'lossless')
         return_format = data.get('format', 'file')  # file 或 json
-        
+
         # 参数验证
         validation_error = api_service._validate_request_params({'music_id': music_id})
         if validation_error:
             return validation_error
-        
+
         # 验证音质参数
         valid_qualities = ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'jyeffect', 'jymaster', 'dolby']
         if quality not in valid_qualities:
             return APIResponse.error(f"无效的音质参数，支持: {', '.join(valid_qualities)}")
-        
+
         # 验证返回格式
         if return_format not in ['file', 'json']:
             return APIResponse.error("返回格式只支持 'file' 或 'json'")
-        
+
         music_id = api_service._extract_music_id(music_id)
-        cookies = api_service._get_cookies()
-        
-        # 获取音乐基本信息
-        song_info = name_v1(music_id)
-        if not song_info or 'songs' not in song_info or not song_info['songs']:
-            return APIResponse.error("未找到音乐信息", 404)
-        
-        # 获取音乐下载链接
-        url_info = url_v1(music_id, quality, cookies)
-        if not url_info or 'data' not in url_info or not url_info['data'] or not url_info['data'][0].get('url'):
-            return APIResponse.error("无法获取音乐下载链接，可能是版权限制或音质不支持", 404)
-        
-        # 构建音乐信息
-        song_data = song_info['songs'][0]
-        url_data = url_info['data'][0]
-        
-        music_info = {
-            'id': music_id,
-            'name': song_data['name'],
-            'artist_string': ', '.join(artist['name'] for artist in song_data['ar']),
-            'album': song_data['al']['name'],
-            'pic_url': song_data['al']['picUrl'],
-            'file_type': url_data['type'],
-            'file_size': url_data['size'],
-            'duration': song_data.get('dt', 0),
-            'download_url': url_data['url']
-        }
-        
-        # 生成安全文件名
-        safe_name = f"{music_info['name']} [{quality}]"
-        safe_name = ''.join(c for c in safe_name if c not in r'<>:"/\|?*')
-        filename = f"{safe_name}.{music_info['file_type']}"
-        
-        file_path = api_service.downloads_path / filename
-        
-        # 检查文件是否已存在
-        if file_path.exists():
-            api_service.logger.info(f"文件已存在: {filename}")
+
+        # 下载（内部含缓存命中复用与首次下载登记）
+        try:
+            download_result = api_service.downloader.download_music_file(music_id, quality)
+        except DownloadException as e:
+            api_service.logger.error(f"下载异常: {e}")
+            return APIResponse.error(f"下载失败: {str(e)}", 404)
+
+        if not download_result.success:
+            api_service.logger.error(f"下载失败: {download_result.error_message}")
+            return APIResponse.error(f"下载失败: {download_result.error_message}", 500)
+
+        file_path = Path(download_result.file_path)
+        info = download_result.music_info
+
+        # 命中缓存复用 → 累加歌曲访问量；首次下载由登记建立初始记录
+        if download_result.cached:
+            api_service.storage.record_access(int(info.id))
+            api_service.logger.info(f"缓存命中，复用文件: {file_path.name}")
         else:
-            # 使用优化后的下载器下载
-            try:
-                download_result = api_service.downloader.download_music_file(
-                    music_id, quality
-                )
-                
-                if not download_result.success:
-                    return APIResponse.error(f"下载失败: {download_result.error_message}", 500)
-                
-                file_path = Path(download_result.file_path)
-                api_service.logger.info(f"下载完成: {filename}")
-                
-            except DownloadException as e:
-                api_service.logger.error(f"下载异常: {e}")
-                return APIResponse.error(f"下载失败: {str(e)}", 500)
-        
+            api_service.logger.info(f"下载完成: {file_path.name}")
+
+        filename = file_path.name
+
         # 根据返回格式返回结果
         if return_format == 'json':
             response_data = {
-                'music_id': music_id,
-                'name': music_info['name'],
-                'artist': music_info['artist_string'],
-                'album': music_info['album'],
+                'music_id': int(info.id),
+                'name': info.name,
+                'artist': info.artists,
+                'album': info.album,
                 'quality': quality,
                 'quality_name': api_service._get_quality_display_name(quality),
-                'file_type': music_info['file_type'],
-                'file_size': music_info['file_size'],
-                'file_size_formatted': api_service._format_file_size(music_info['file_size']),
+                'file_type': file_path.suffix.lstrip('.'),
+                'file_size': info.file_size,
+                'file_size_formatted': api_service._format_file_size(info.file_size),
                 'file_path': str(file_path.absolute()),
                 'filename': filename,
-                'duration': music_info['duration']
+                'duration': info.duration,
+                'cached': download_result.cached
             }
             return APIResponse.success(response_data, "下载完成")
         else:
             # 返回文件下载
             if not file_path.exists():
                 return APIResponse.error("文件不存在", 404)
-            
+
             try:
                 response = send_file(
                     str(file_path),
                     as_attachment=True,
                     download_name=filename,
-                    mimetype=f"audio/{music_info['file_type']}"
+                    mimetype=f"audio/{file_path.suffix.lstrip('.')}"
                 )
                 response.headers['X-Download-Message'] = 'Download completed successfully'
                 response.headers['X-Download-Filename'] = quote(filename, safe='')
@@ -580,7 +561,7 @@ def download_music_api():
             except Exception as e:
                 api_service.logger.error(f"发送文件失败: {e}")
                 return APIResponse.error(f"文件发送失败: {str(e)}", 500)
-            
+
     except Exception as e:
         api_service.logger.error(f"下载音乐异常: {e}\n{traceback.format_exc()}")
         return APIResponse.error(f"下载异常: {str(e)}", 500)
@@ -608,7 +589,8 @@ def api_info():
                 'hires', 'sky', 'jyeffect', 'jymaster'
             ],
             'config': {
-                'downloads_dir': str(api_service.downloads_path.absolute()),
+                'storage_dir': str(api_service.storage_path.resolve()),
+                'max_cache_mb': f"{config.max_cache_mb:g}MB",
                 'max_file_size': f"{config.max_file_size // (1024*1024)}MB",
                 'request_timeout': f"{config.request_timeout}s"
             }

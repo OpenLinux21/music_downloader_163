@@ -17,8 +17,8 @@ Web 服务仅使用其中的 `download_music_file` 同步路径；异步/内存/
 | --- | --- |
 | `AudioFormat`(Enum) | mp3/flac/m4a/mp4/unknown（当前未被业务逻辑引用） |
 | `QualityLevel`(Enum) | 与 `music_api.py` 重复定义（8 项，未被引用，已知问题 #9） |
-| `MusicInfo`(dataclass) | 13 字段：id、name、artists、album、pic_url、duration（秒，由上游毫秒 `dt//1000`）、track_number、download_url、file_type、file_size、quality、lyric、tlyric |
-| `DownloadResult`(dataclass) | success、file_path、file_size、error_message、music_info |
+| `MusicInfo`(dataclass) | 14 字段：id、name、artists、album、**album_id**（2026-11-15 新增，取自上游 `al.id`）、pic_url、duration（秒，由上游毫秒 `dt//1000`）、track_number、download_url、file_type、file_size、quality、lyric、tlyric |
+| `DownloadResult`(dataclass) | success、file_path、file_size、error_message、music_info、**cached**（2026-11-15 新增，是否命中缓存复用） |
 | `DownloadException` | 下载域异常（API 异常在此包装） |
 
 映射表常量：
@@ -32,15 +32,31 @@ Web 服务仅使用其中的 `download_music_file` 同步路径；异步/内存/
 ## 3. MusicDownloader 构造与工具方法
 
 ```python
-MusicDownloader(download_dir="downloads", max_concurrent=3, ffmpeg_path=None)
+MusicDownloader(storage_dir="storage", max_concurrent=3, ffmpeg_path=None,
+                storage_manager=None)
 ```
 
-- 构造时创建下载目录、内部新建一份 `NeteaseAPI`、用 `shutil.which("ffmpeg")` 做首次检测（缺失仅经 `DOWNLOADER` 日志器告警，不报错）。
+- 存储构造：`storage_manager` 注入外部 `StorageManager`（服务侧传入带缓存上限配置的实例）；
+  缺省时按 `storage_dir` 自建（不限总量、默认 90 天保留期）。存储布局与 DB 设计见 `docs/database.md`。
+- 构造时内部新建一份 `NeteaseAPI`、用 `shutil.which("ffmpeg")` 做首次检测（缺失仅经 `DOWNLOADER` 日志器告警，不报错）。
 - 日志：模块内事件统一经 `logger.get_logger("DOWNLOADER")` 输出（GIN 风格），CLI 入口（`__main__`）的交互输出仍为 print。
 - `_resolve_ffmpeg()`：每次写元数据前懒加载重试并回写缓存，支持服务运行中途安装 ffmpeg。
 - `_sanitize_filename()`：替换 `<>:"/\|?*` 为 `_`、去首尾空格与点、超 200 字符截断、空串回退 `unknown`。
 - `_determine_file_extension()` 优先级：API `type` > URL 后缀（.flac/.mp3/.m4a|.mp4）> Content-Type（flac/mpeg|mp3/mp4|m4a）> 默认 `.mp3`。
-- `_build_file_path()`：`{artists} - {name}` 经清洗后拼扩展名，得到最终保存路径。
+- `_build_file_path()`：`storage/<song_id>/歌曲名[.音质].扩展名`（音质段仅在扩展名被其他音质占用时追加）。
+
+## 3.1 下载后登记 `_post_register(music_info, file_path)`
+
+下载完成后统一执行（同步/异步共用）：
+
+1. `register_song`：登记歌曲元数据（UPSERT，保留累计访问量）；
+2. 封面下载一次 → `storage/<song_id>/cover.jpg`（同时作为 ffmpeg 嵌入源，`_write_metadata_with_ffmpeg` 的 `cover_local` 参数）；
+3. 歌词 → `storage/<song_id>/lyric.lrc`（空歌词跳过）；
+4. ffmpeg 写元数据与封面（失败不阻断）；
+5. `register_file`：登记音质文件（**在元数据写入之后取大小**，保证 DB 与落盘一致）；
+6. 归属专辑（`album_id` 非空）→ `copy2` 副本至 `storage/albums/<album_id>/<song_id>/`（含封面歌词）并以 `is_copy=1` 登记。
+
+缓存命中（`get_cached_file`）时整个后处理流程跳过，改由 root.db 记录构建 `MusicInfo`（`_music_info_from_record`），不发起上游调用。
 
 ## 4. 信息获取 `get_music_info(music_id, quality)`
 
@@ -55,7 +71,7 @@ MusicDownloader(download_dir="downloads", max_concurrent=3, ffmpeg_path=None)
 | `download_music_to_memory` | requests 一次性读入 | 否（BytesIO） | 否 | 无（预留） |
 | `download_batch_async` | asyncio + `Semaphore(max_concurrent)` 并发包装异步下载 | 是 | 是 | 无（预留） |
 
-共性逻辑：目标文件已存在时直接返回成功（不重复下载、不重写元数据）；网络失败返回 `success=False` 的 `DownloadResult`（不抛异常）；信息获取失败抛 `DownloadException`。
+共性逻辑（2026-11-15 缓存键化后）：先查 `storage.get_cached_file(song_id, quality)`，命中直接复用（`cached=true`，不重写元数据、不发起上游调用）；未命中才下载（先写 `.part` 临时文件，完成后原子改名）。网络失败返回 `success=False` 的 `DownloadResult`（不抛异常）；信息获取失败抛 `DownloadException`。
 
 `download_batch_async` 对每个任务的异常降级为失败结果列表项，保证 `gather` 不中断。
 
@@ -68,7 +84,7 @@ MusicDownloader(download_dir="downloads", max_concurrent=3, ffmpeg_path=None)
 完整流程图与各格式参数表见 `docs/data-flow.md` 第 5 节，此处补充实现约束：
 
 1. **前置检查**：ffmpeg 可解析、扩展名 ∈ `METADATA_FORMATS`、文件存在；任一不满足直接返回 `False` 并经 `DOWNLOADER` 日志器告警。
-2. **封面**：有 `pic_url` 时下载为 `download_dir` 下 `mkstemp` 临时 `.jpg`；下载失败降级为无封面继续。
+2. **封面**：优先使用 `_post_register` 已落盘的 `storage/<song_id>/cover.jpg`（`cover_local` 参数）；未提供时回退下载为 `storage/` 下 `mkstemp` 临时 `.jpg`（finally 清理，已落盘文件不删）；下载失败降级为无封面继续。
 3. **命令构造顺序**：全局选项 → `-i` 音频 →（可选）`-i` 封面 → `-metadata` 序列 → 格式专属参数 → `-f` muxer（必须位于 `-i` 之后作为输出选项）→ 输出文件 `原名.tagging.原扩展名`。
 4. **写入的元数据键**：`title`、`artist`、`album`、`album_artist`、`comment`（固定为 `Downloaded from Netease Cloud Music`）、`track`/`tracktotal`（`track_number > 0` 时，两者同值）。
 5. **原子性**：`subprocess.run` 成功且临时文件存在时 `shutil.move` 替换原文件；超时 120 秒；`finally` 中清理封面临时文件与残留 `.tagging` 文件。

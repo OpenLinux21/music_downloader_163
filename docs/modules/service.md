@@ -17,7 +17,8 @@
 | `host` | `127.0.0.1`（实例化时读自 `config.toml` 的 `server.host`） | 监听地址 |
 | `port` | `5000`（实例化时读自 `config.toml` 的 `server.port`） | 监听端口 |
 | `debug` | `False` | Flask 调试模式 |
-| `downloads_dir` | `downloads` | 下载目录（相对项目根） |
+| `storage_dir` | `storage` | 存储根目录（相对项目根，按歌曲 ID 分类） |
+| `max_cache_mb` | `8192`（实例化时读自 `config.toml` 的 `cache.max_size_mb`） | 本地缓存总大小上限（MB），超限按访问量淘汰 |
 | `max_file_size` | 500MB | 仅在 `/api/info` 中展示，**无实际限制逻辑** |
 | `request_timeout` | 30 | 仅在 `/api/info` 中展示，**未传递给上游调用**（上游超时硬编码在 `music_api`） |
 | `log_level` | `INFO` | 统一日志级别（`SERVER` 组件，经 `logger.get_logger` 生效） |
@@ -34,7 +35,7 @@
 
 ## 4. 服务类 `MusicAPIService`
 
-实例化时机：**模块导入时**（`api_service = MusicAPIService(config)`），即 `import main` 就会产生副作用：初始化 `NeteaseAPI`、`MusicDownloader`、创建 `downloads/` 目录、初始化 `SERVER` 统一日志器。
+实例化时机：**模块导入时**（`api_service = MusicAPIService(config)`），即 `import main` 就会产生副作用：初始化 `NeteaseAPI`、创建 `StorageManager`（建 `storage/` 与 `root.db` 并立即执行一轮清理）、启动清理守护线程、初始化 `MusicDownloader`（注入同一存储管理器）、初始化 `SERVER` 统一日志器。
 
 关键内部方法：
 
@@ -76,14 +77,13 @@
 3. `type=name`/`lyric`：直接透传上游结构；
 4. `type=json`：并发语义上是顺序调用 `name_v1` + `url_v1` + `lyric_v1` 三次上游，聚合为前端解析页所需结构；URL 失败不报错（`url=''`、`size='获取失败'`）。
 
-### 6.2 `/download` 实现
+### 6.2 `/download` 实现（2026-11-15 重写）
 
 1. 校验 `quality`、`format`；
-2. 先后调用 `name_v1`（校验存在）与 `url_v1`（取下载链接）；
-3. 构造展示文件名 `歌名 [quality].扩展名`（过滤 `<>:"/\|?*`），`file_path = downloads/该名`；
-4. 若 `file_path` 存在则视为缓存命中——但下载器实际保存名为 `歌手 - 歌名.扩展名`，两者不一致导致该检查基本不生效（已知问题 #3）；
-5. 否则调用 `downloader.download_music_file(music_id, quality)`（内部再次请求上游并落盘、写元数据），并把 `file_path` 重指为下载器返回的真实路径；
-6. `format=json` 返回下载信息；`format=file` 用 `send_file(as_attachment=True)` 返回文件流，附 `X-Download-Message`、`X-Download-Filename`（`quote` 编码）响应头。
+2. 委托 `downloader.download_music_file(music_id, quality)`：内部先查缓存键 `(song_id, quality)`，命中复用文件并经 root.db 组装响应（`cached=true`）；未命中才发起唯一一轮上游调用（URL/详情/歌词一次取齐）并落盘登记（原路由层 `name_v1`+`url_v1` 预调用已删除，知识库已知问题 #5 修复）；
+3. `DownloadException` 返回 404（版权限制/取链失败等）；其他下载失败返回 500；
+4. 命中缓存时执行 `storage.record_access(song_id)` 累加访问量；
+5. `format=json` 返回下载信息（含 `cached` 字段）；`format=file` 用 `send_file(as_attachment=True)` 返回文件流，附 `X-Download-Message`、`X-Download-Filename`（实际文件名，`quote` 编码）响应头。
 
 ## 7. 启动流程（`start.py`，统一启动入口）
 

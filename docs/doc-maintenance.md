@@ -58,7 +58,7 @@
 | 2026-11-15 | `docs/` 全部 11 份文档 + `docs/skills/` 5 份技能文件 | 新增 | 文档体系建设任务初版创建 |
 | 2026-11-15 | `docs/skills/!dev.md` | 新增 | 用户于本任务执行期间放置的强制技能文件（极简工程师原则，309 行）。文件名以 `!` 开头，按 `AGENTS.md` 加载规则属任何任务前必读文件；因位于文档体系目录内，随本次任务一并纳入版本控制 |
 | 2026-11-15 | `docs/skills/` 下 5 份任务型技能文件（`!core-rules.md`、`backend-code.md`、`api-design.md`、`deployment.md`、`frontend.md`） | 删除 | 用户要求精简，仅保留 `!dev.md`；验证方式矩阵并入本文第 3 节，任务前必读指引改由各模块文档引言块承担 |
-| （示例行，勿删格式） | `docs/xxx.md` | 新增/删除 | 一句话说明 |
+| 2026-11-15 | `docs/database.md` | 新增 | 项目引入数据库（storage/root.db，feat/storage-cache 分支）；按本文第 1 节「存储/数据流变化」规则建立，后续新表须同步更新该文档 |
 
 ## 6. 文档体系当前清单
 
@@ -69,6 +69,7 @@ docs/
 ├── knowledge-base.md             项目知识库
 ├── api.md                        HTTP API 说明
 ├── data-flow.md                  数据流说明
+├── database.md                   数据库与存储体系设计（root.db / storage 布局 / 清理策略）
 ├── deployment.md                 部署运行指南
 ├── history.md                    开发历史与设计决策
 ├── doc-maintenance.md            本文档（维护机制）

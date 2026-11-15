@@ -75,7 +75,7 @@ ID/链接 ──► _extract_music_id ──► music_id
 前端：解析 LRC → 原文与翻译按时间戳合并 → APlayer 播放 + 歌词滚动
 ```
 
-## 4. 下载流水线（`/download`，当前实现存在重复上游调用）
+## 4. 下载流水线（`/download`，2026-11-15 起缓存键化并消除重复上游调用）
 
 ```text
 POST /download {id, quality, format}
@@ -87,32 +87,36 @@ POST /download {id, quality, format}
 _extract_music_id → music_id
    │
    ▼
-【第 1 次上游调用】name_v1(music_id)      → 歌名/歌手/专辑/封面（校验歌曲存在）
-【第 2 次上游调用】url_v1(music_id, quality, cookies) → 下载 URL（失败即 404）
+【缓存查询】storage.get_cached_file(song_id, quality)
+   ├─ 命中（DB 记录 + 文件存在）→ 复用文件，响应组装读 root.db（song_with_file），
+   │   路由层 record_access(song_id) 累加访问量 → cached=true
+   │   （不发起任何上游调用）
+   └─ 未命中 ↓
    │
    ▼
-构造展示文件名 filename = "歌名 [quality].扩展名"，清洗非法字符
-   file_path = downloads/filename
+【唯一一次上游交互】downloader.get_music_info(music_id, quality)
+   ├─ url_v1：播放/下载 URL（无 URL 抛 DownloadException → 路由返回 404）
+   ├─ song/detail v3：歌名/歌手/专辑(含 album_id)/封面
+   └─ lyric：原文 + 翻译
    │
    ▼
-if file_path 存在 → 视为缓存命中，跳过下载
-   （注：下载器实际保存名为 "歌手 - 歌名.扩展名"，与本检查路径不一致，
-     该缓存检查基本不生效 —— 见知识库已知问题 #3）
+【落盘】路径 = storage/<song_id>/歌曲名[.音质].扩展名（扩展名判定链不变）
+   流式下载 → *.part 临时文件 → 原子改名
    │
    ▼
-【第 3~5 次上游调用】downloader.download_music_file(music_id, quality)
-   ├─ get_music_info：再次 url_v1（+print 调试残留）、song/detail、lyric
-   ├─ requests 流式下载 URL → downloads/"歌手 - 歌名.扩展名"
-   └─ _write_metadata_with_ffmpeg：写元数据 + 封面（失败不阻断）
+【后处理 _post_register】（顺序保证 DB 大小与落盘一致）
+   ├─ 封面下载一次 → storage/<song_id>/cover.jpg（同时供 ffmpeg 嵌入）
+   ├─ 歌词 → storage/<song_id>/lyric.lrc
+   ├─ ffmpeg 写元数据+封面（失败不阻断）
+   ├─ register_song / register_file（root.db 登记）
+   └─ 归属专辑 → copy2 副本到 storage/albums/<album_id>/<song_id>/ 并登记（is_copy=1）
    │
    ▼
-file_path ← 下载器返回的真实路径
-   │
-   ├─ format=json → 返回下载信息 JSON（含 file_path 真实绝对路径）
-   └─ format=file → send_file 文件流
-        + X-Download-Message / X-Download-Filename（展示名，URL 编码）响应头
-        前端读响应头命名 blob 触发浏览器保存
+file → send_file 文件流 + X-Download-Message / X-Download-Filename（实际文件名，URL 编码）
+json → 下载信息 JSON（含 cached 字段）
 ```
+
+原「路由层先调 name_v1+url_v1、下载器内部再调一轮」的重复上游调用已消除（知识库已知问题 #5）；原「歌名 [音质]」展示名缓存检查失效问题随缓存键化一并修复（知识库已知问题 #3）。
 
 ## 5. ffmpeg 元数据写入流（`MusicDownloader._write_metadata_with_ffmpeg`）
 
@@ -172,6 +176,10 @@ finally：删除封面临时文件与残留 .tagging 文件
 | --- | --- | --- | --- |
 | `config.toml` | 人工 / `qr_login.py` / 服务启动读取 | 部署时从模板复制并填写 | Git 不跟踪（.gitignore、.dockerignore 均已排除） |
 | `cookie.backup.*.txt` | `qr_login.py` | 覆盖/清除 Cookie 前 | 无自动清理，Git 不跟踪 |
+| `storage/root.db` | `storage_manager.py` | 服务启动建库；下载/命中/清理时读写 | Git 不跟踪 |
+| `storage/<song_id>/…` | `MusicDownloader`（经 `_post_register`） | 首次下载落盘并登记；命中复用不写盘 | 3 个月到期删除 / 超限按访问量淘汰（见 `docs/database.md`） |
+| `storage/albums/<album_id>/<song_id>/…` | `MusicDownloader` | 下载完成后 copy2 副本 | 随歌曲一并清理 |
+| `storage/<song_id>/*.part` | 下载临时文件 | 下载期间 | 完成后原子改名 |
 | `logs/service.log`（+ 轮转备份） | `logger.py` | 每次请求与组件事件 | 5MB 轮转保留 3 份，Git 不跟踪 |
 | `downloads/歌手 - 歌名.扩展名` | `MusicDownloader` | 每次下载 | 无自动清理，同名跳过（按下载器命名） |
 | `downloads/*.tagging.*` | ffmpeg 临时输出 | 元数据写入期间 | 成功后 move、失败后 finally 删除 |

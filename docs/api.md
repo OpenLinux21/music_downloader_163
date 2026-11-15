@@ -75,7 +75,7 @@
   "timestamp": 1794746216,
   "cookie_status": "valid",
   "cookie_count": 2,
-  "downloads_dir": "/app/downloads",
+  "storage_dir": "/app/storage",
   "version": "2.0.0"
 }
 ```
@@ -159,18 +159,18 @@ POST /song {"id":"123","level":"xxx"}
 | `quality` | 否 | `lossless` | 音质，见第 3 节 |
 | `format` | 否 | `file` | `file` 返回文件流；`json` 返回下载信息 JSON |
 
-`format=file`：成功返回音频文件流（`Content-Disposition: attachment`），并附加响应头：
+`format=file`：成功返回音频文件流（`Content-Disposition: attachment`，文件按实际音频格式命名），并附加响应头：
 
 | 响应头 | 内容 |
 | --- | --- |
 | `X-Download-Message` | `Download completed successfully` |
-| `X-Download-Filename` | URL 编码（`quote`，safe 为空）后的文件名 |
+| `X-Download-Filename` | URL 编码（`quote`，safe 为空）后的实际文件名（如 `歌名.mp3`） |
 
-`format=json`：`data` 结构：
+`format=json`：`data` 结构（2026-11-15 起新增 `cached` 字段）：
 
 ```json
 {
-  "music_id": "185668",
+  "music_id": 185668,
   "name": "歌名",
   "artist": "歌手",
   "album": "专辑",
@@ -179,17 +179,21 @@ POST /song {"id":"123","level":"xxx"}
   "file_type": "flac",
   "file_size": 8912841,
   "file_size_formatted": "8.50MB",
-  "file_path": "/app/downloads/歌手 - 歌名.flac",
-  "filename": "歌名 [lossless].flac",
-  "duration": 223
+  "file_path": "/app/storage/185668/歌名.flac",
+  "filename": "歌名.flac",
+  "duration": 223,
+  "cached": false
 }
 ```
 
-说明：`filename` 为路由层构造的展示名（`歌名 [音质].扩展名`），而 `file_path` 指向下载器实际保存文件（`歌手 - 歌名.扩展名`），两者命名规则不同（见知识库已知问题 #3）。
+说明（2026-11-15 起生效）：
+- 缓存键为 `(song_id, quality)`：命中直接复用 `storage/<song_id>/` 下已有文件并累加歌曲访问量，`cached=true`，响应数据读自 `root.db`，不发起上游调用；未命中才真实下载（`cached=false`）。
+- `filename`/`file_path` 均为实际存储文件名（`storage/<song_id>/歌曲名.扩展名`，扩展名冲突时含音质段），原「歌名 [音质]」展示名与双重命名规则已废除（知识库已知问题 #3 已修复）。
+- 下载链路只经下载器一次上游交互（链接/详情/歌词一次取齐），原重复调用已消除（知识库已知问题 #5 已修复）；上游取链失败（版权/音质不支持等 `DownloadException`）返回 404。
 
 ### 4.8 `GET /api/info` — 服务信息
 
-无参数。`data` 含 `name`（网易云音乐API服务）、`version`（2.0.0）、`endpoints`（7 个端点及说明）、`supported_qualities`（**当前为 7 项，缺 `dolby`，与其他接口校验列表不一致**）、`config`（下载目录绝对路径、`max_file_size` 500MB、`request_timeout` 30s）。
+无参数。`data` 含 `name`（网易云音乐API服务）、`version`（2.0.0）、`endpoints`（7 个端点及说明）、`supported_qualities`（**当前为 7 项，缺 `dolby`，与其他接口校验列表不一致**）、`config`（`storage_dir` 存储目录绝对路径、`max_cache_mb` 缓存上限、`max_file_size` 500MB、`request_timeout` 30s）。
 
 ## 5. 输入解析规则（重要）
 
@@ -212,6 +216,6 @@ POST /song {"id":"123","level":"xxx"}
 | 400 | `参数格式错误: ...` | `/search` 的 `limit/offset` 无法转 int |
 | 404 | `获取音乐URL失败，可能是版权限制或音质不支持` | 上游未返回 URL |
 | 404 | `未找到音乐信息` / `未找到歌曲信息` | 上游详情为空 |
-| 404 | `无法获取音乐下载链接，可能是版权限制或音质不支持` | `/download` 取链失败 |
+| 404 | `无法获取音乐下载链接，可能是版权限制或音质不支持` / `下载失败: ...` | `/download` 取链或信息获取失败（`DownloadException`） |
 | 404 | `文件不存在` | 返回文件时本地文件缺失 |
 | 500 | `API调用失败: ...` / `服务器错误: ...` 等 | 上游异常或内部错误 |
