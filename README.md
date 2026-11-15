@@ -2,6 +2,11 @@
 
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/music-white.svg" />
+  <img src="frontend/src/assets/music.svg" width="120" alt="网易云音乐解析下载服务" />
+</picture>
+
 ![GitHub stars](https://img.shields.io/github/stars/OpenLinux21/music_downloader_163?style=flat-square)
 ![GitHub forks](https://img.shields.io/github/forks/OpenLinux21/music_downloader_163?style=flat-square)
 ![GitHub issues](https://img.shields.io/github/issues/OpenLinux21/music_downloader_163?style=flat-square)
