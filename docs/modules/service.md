@@ -19,6 +19,8 @@
 | `debug` | `False` | Flask 调试模式 |
 | `storage_dir` | `storage` | 存储根目录（相对项目根，按歌曲 ID 分类） |
 | `max_cache_mb` | `8192`（实例化时读自 `config.toml` 的 `cache.max_size_mb`） | 本地缓存总大小上限（MB），超限按访问量淘汰 |
+| `multi_thread` | `False`（读自 `config.toml` 的 `download.multi_thread`） | 单文件多线程（Range 分段）下载开关，不支持 Range 自动回退单流 |
+| `speed_limit_kb` | `0`（读自 `config.toml` 的 `download.speed_limit_kb`） | 下载限速（KB/s），0 不限速 |
 | `max_file_size` | 500MB | 仅在 `/api/info` 中展示，**无实际限制逻辑** |
 | `request_timeout` | 30 | 仅在 `/api/info` 中展示，**未传递给上游调用**（上游超时硬编码在 `music_api`） |
 | `log_level` | `INFO` | 统一日志级别（`SERVER` 组件，经 `logger.get_logger` 生效） |

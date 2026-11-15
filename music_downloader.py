@@ -4,13 +4,15 @@
 - 同步 / 异步下载（本地落盘 / 内存返回）
 - 批量并发下载
 - 进度查询
-- 基于 ffmpeg 的元数据 + 封面写入（MP3/FLAC/M4A/MP4/OGG/Opus）
+- 基于 ffmpeg 的元数据 + 封面 + 歌词嵌入（MP3/FLAC/M4A/MP4/OGG/Opus）
+- 传输层：单流 / 4 段 Range 多线程（自动回退）+ KB/s 限速（同步路径）
 
 设计要点：
 1. ffmpeg 路径懒加载：每次写入前重新检测，支持服务启动后中途安装
 2. 显式 -f 指定输出格式 + 临时文件保留原扩展名在最后，双保险
 3. MP4（杜比全景声 EAC3）单独分支，启用 +faststart
 4. 扩展名优先使用 API 返回的 type 字段，URL/Content-Type 兜底
+5. 歌词经 -metadata lyrics= 嵌入容器（mp3=USLT / flac=LYRICS / m4a=©lyr）
 """
 
 from __future__ import annotations
@@ -21,6 +23,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from io import BytesIO
@@ -94,6 +99,30 @@ class DownloadException(Exception):
     pass
 
 
+class _RateLimiter:
+    """简单限速器：按平均速率控制字节写入节奏（多线程共享实例）
+
+    rate_kb 为 0 时不限速。实现为「按已发字节计算应达时刻」的均匀节流，
+    长时间平均速率收敛于目标值（非严格令牌桶，够用且无突发）。
+    """
+
+    def __init__(self, rate_kb: float):
+        self.rate = float(rate_kb) * 1024  # 字节/秒
+        self._lock = threading.Lock()
+        self._sent = 0.0
+        self._t0 = time.monotonic()
+
+    def wait(self, n_bytes: int) -> None:
+        if self.rate <= 0 or n_bytes <= 0:
+            return
+        with self._lock:
+            self._sent += n_bytes
+            target = self._t0 + self._sent / self.rate
+        delay = target - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+
+
 # ============ 工具映射表 ============
 
 # API 返回的 type -> 文件扩展名
@@ -136,6 +165,8 @@ class MusicDownloader:
         max_concurrent: int = 3,
         ffmpeg_path: Optional[str] = None,
         storage_manager: Optional[StorageManager] = None,
+        multi_thread: bool = False,
+        speed_limit_kb: float = 0,
     ):
         """
         Args:
@@ -144,10 +175,14 @@ class MusicDownloader:
             ffmpeg_path: ffmpeg 可执行文件路径，为 None 时启动时检测一次
             storage_manager: 外部注入的存储管理器（服务侧传入带配置的实例）；
                 缺省时按 storage_dir 自建（不限总量、默认保留期）
+            multi_thread: 单文件多线程（Range 分段）下载开关；服务端不支持 Range 时自动回退单流
+            speed_limit_kb: 下载限速（KB/s），0 表示不限速
         """
         self.logger = get_logger("DOWNLOADER")
         self.storage = storage_manager or StorageManager(storage_dir)
         self.max_concurrent = max_concurrent
+        self.multi_thread = bool(multi_thread)
+        self.speed_limit_kb = float(speed_limit_kb)
 
         self.api = NeteaseAPI()
 
@@ -274,6 +309,82 @@ class MusicDownloader:
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
+    # ----------- 传输层（单流 / 多线程分段 + 限速） -----------
+
+    def _download_single_stream(self, url: str, dest: Path, limiter: _RateLimiter) -> int:
+        """单流下载到 dest，返回写入字节数"""
+        written = 0
+        with requests.get(url, stream=True, timeout=30) as resp:
+            resp.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    if chunk:
+                        f.write(chunk)
+                        written += len(chunk)
+                        limiter.wait(len(chunk))
+        return written
+
+    def _download_ranged(self, url: str, start: int, end: int, dest: Path,
+                         limiter: _RateLimiter) -> int:
+        """Range 分段下载 [start, end] 到 dest，返回写入字节数"""
+        written = 0
+        headers = {"Range": f"bytes={start}-{end}"}
+        with requests.get(url, stream=True, timeout=30, headers=headers) as resp:
+            resp.raise_for_status()
+            if resp.status_code != 206:
+                raise RuntimeError(f"服务端不支持 Range 请求（HTTP {resp.status_code}）")
+            with open(dest, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    if chunk:
+                        f.write(chunk)
+                        written += len(chunk)
+                        limiter.wait(len(chunk))
+        return written
+
+    def _download_to(self, url: str, dest: Path, total_size: int,
+                     limiter: _RateLimiter) -> None:
+        """按配置执行单流或多线程分段下载，写入 dest（.part 中间文件）
+
+        多线程：按 4 段 Range 并发拉取后顺序拼接；总大小未知或任一分段失败时
+        自动回退单流（失败的分段临时文件会被清理）。
+        """
+        threads = 4
+        use_multi = (
+            self.multi_thread
+            and total_size and total_size > 512 * 1024  # 小文件不值得分段
+        )
+        if use_multi:
+            part_size = total_size // threads
+            ranges: List[Tuple[int, int]] = []
+            for i in range(threads):
+                start = i * part_size
+                end = (total_size - 1) if i == threads - 1 else (start + part_size - 1)
+                ranges.append((start, end))
+            part_files = [dest.with_name(dest.name + f".p{i}") for i in range(threads)]
+            try:
+                with ThreadPoolExecutor(max_workers=threads) as pool:
+                    futures = [
+                        pool.submit(self._download_ranged, url, s, e, pf, limiter)
+                        for (s, e), pf in zip(ranges, part_files)
+                    ]
+                    sizes = [fut.result() for fut in futures]
+                if sum(sizes) != total_size:
+                    raise RuntimeError(
+                        f"分段大小校验失败: 拼接 {sum(sizes)} != 期望 {total_size}"
+                    )
+                with open(dest, "wb") as out:
+                    for pf in part_files:
+                        with open(pf, "rb") as src:
+                            shutil.copyfileobj(src, out)
+                for pf in part_files:
+                    pf.unlink(missing_ok=True)
+                return
+            except Exception as e:
+                self.logger.warning(f"多线程下载失败，回退单流: {e}")
+                for pf in part_files:
+                    pf.unlink(missing_ok=True)
+        self._download_single_stream(url, dest, limiter)
+
     # ----------- 下载（同步） -----------
 
     def download_music_file(
@@ -304,14 +415,10 @@ class MusicDownloader:
             music_info = self.get_music_info(music_id, quality)
             file_path = self._build_file_path(music_info)
 
-            # 流式下载到临时文件，完成后原子改名
+            # 下载到临时文件（按配置单流/多线程 + 限速），完成后原子改名
             tmp_path = file_path.with_name(file_path.name + ".part")
-            response = requests.get(music_info.download_url, stream=True, timeout=30)
-            response.raise_for_status()
-            with open(tmp_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+            self._download_to(music_info.download_url, tmp_path,
+                              music_info.file_size, _RateLimiter(self.speed_limit_kb))
             tmp_path.replace(file_path)
 
             # 登记 + 后处理（封面/歌词落盘、元数据写入、专辑副本）
@@ -622,7 +729,7 @@ class MusicDownloader:
             if cover_tmp:
                 cmd += ["-i", cover_tmp]
 
-            # 通用元数据
+            # 通用元数据（lyrics 嵌入歌词原文，使文件独立携带歌词，无需外部 .lrc）
             meta = {
                 "title": music_info.name,
                 "artist": music_info.artists,
@@ -630,6 +737,8 @@ class MusicDownloader:
                 "album_artist": music_info.artists,
                 "comment": "Downloaded from Netease Cloud Music",
             }
+            if music_info.lyric and music_info.lyric.strip():
+                meta["lyrics"] = music_info.lyric
             if music_info.track_number > 0:
                 meta["track"] = str(music_info.track_number)
                 meta["tracktotal"] = str(music_info.track_number)

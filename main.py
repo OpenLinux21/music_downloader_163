@@ -42,6 +42,8 @@ class APIConfig:
     debug: bool = False
     storage_dir: str = 'storage'
     max_cache_mb: float = 8192  # 本地缓存大小上限（MB），读自 config.toml
+    multi_thread: bool = False  # 是否允许多线程下载，读自 config.toml
+    speed_limit_kb: float = 0  # 下载限速（KB/s），0 不限速，读自 config.toml
     max_file_size: int = 500 * 1024 * 1024  # 500MB
     request_timeout: int = 30
     log_level: str = 'INFO'
@@ -90,7 +92,11 @@ class MusicAPIService:
             max_total_mb=float(self.config.max_cache_mb),
         )
         self.storage_path = self.storage.storage_dir
-        self.downloader = MusicDownloader(storage_manager=self.storage)
+        self.downloader = MusicDownloader(
+            storage_manager=self.storage,
+            multi_thread=self.config.multi_thread,
+            speed_limit_kb=self.config.speed_limit_kb,
+        )
 
         self.logger.info(f"音乐API服务初始化完成，存储目录: {self.storage_path.resolve()}")
         self.storage.start_cleanup_daemon()
@@ -186,6 +192,8 @@ config = APIConfig(
     host=str(_cfg["server"]["host"]),
     port=int(_cfg["server"]["port"]),
     max_cache_mb=float(_cfg["cache"]["max_size_mb"]),
+    multi_thread=bool(_cfg["download"]["multi_thread"]),
+    speed_limit_kb=float(_cfg["download"]["speed_limit_kb"]),
 )
 app = Flask(__name__)
 api_service = MusicAPIService(config)
