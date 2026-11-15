@@ -1,6 +1,6 @@
 # 模块详解：网易云 API 封装（music_api.py 与 qr_login.py）
 
-> 本文档详解上游协议封装模块与二维码登录 CLI。修改这两个文件前须先读取 `docs/skills/backend-code.md`。
+> 本文档详解上游协议封装模块与二维码登录 CLI。修改这两个文件前须先读取 `docs/skills/!dev.md` 与本文档。
 > 上游接口清单与协议事实同时登记于 `docs/knowledge-base.md` 第 4 节。代码变化时须按 `docs/doc-maintenance.md` 同步更新。
 
 ## 1. music_api.py 模块结构

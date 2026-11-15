@@ -14,7 +14,7 @@
 | 运行版本 | Python 3.12（本机 `.venv` 实测 3.12.16；Docker `python:3.12-alpine3.23`） |
 | 启动方式 | `python main.py`（无命令行参数解析） |
 | 数据库 | 无（仅文件存储，见 `docs/architecture.md` 第 6 节） |
-| 测试框架 | 无；标准验证方式见 `docs/skills/!core-rules.md` |
+| 测试框架 | 无；标准验证方式见 `docs/doc-maintenance.md` 第 3 节 |
 
 ## 2. 术语表
 
@@ -83,7 +83,7 @@
 | 4 | `/api/info` 返回的 `supported_qualities` 缺少 `dolby`，与 `/song`、`/download` 的校验列表（8 项）不一致 | `main.py` 的 `api_info()` | 信息展示不完整 | 修复时需同步 `docs/api.md` |
 | 5 | `/download` 链路重复调用上游：`main.py` 先调 `name_v1`+`url_v1`，随后 `MusicDownloader.get_music_info()` 内部再调一次 URL、详情、歌词接口 | `main.py`、`music_downloader.py` 的 `get_music_info()` | 每次下载产生约 5 次上游请求 | 修复时需同步 `docs/data-flow.md` |
 | 6 | `music_downloader.get_music_info()` 中存在调试残留 `print(url_result)`，会把含下载 URL 的完整响应打印到控制台 | `music_downloader.py` 的 `get_music_info()` | 日志噪音、URL 泄露到 stdout | 修复时需同步 `docs/modules/downloader.md` |
-| 7 | `downloads/` 目录未被 `.gitignore` 覆盖，下载产物有被误提交的风险 | `.gitignore` | 仓库卫生风险 | 提交前必须检查暂存区（`docs/skills/!core-rules.md`） |
+| 7 | `downloads/` 目录未被 `.gitignore` 覆盖，下载产物有被误提交的风险 | `.gitignore` | 仓库卫生风险 | 提交前必须检查暂存区（`AGENTS.md` 第 2 节凭据安全红线） |
 | 8 | 前端错误分支访问 `data.data.msg`，而错误响应结构中不存在 `data` 字段（`APIResponse.error` 仅含 `status/success/message`），会抛 `TypeError`，错误提示无法显示 | `templates/index.html` 各 `$.post/$.get` 的失败分支 | 用户看不到具体错误原因 | 修复时需同步 `docs/modules/frontend.md` |
 | 9 | `music_api.py` 与 `music_downloader.py` 重复定义 `QualityLevel` 枚举，且两处均未被业务逻辑实际引用（音质校验用硬编码列表） | 两个模块顶部 | 修改音质列表需多处同步 | 见 `docs/doc-maintenance.md` |
 | 10 | `main.py` 导入的 `QualityLevel`、`AudioFormat` 实际未使用 | `main.py` 顶部 import | 轻微冗余 | 可在重构任务中清理 |

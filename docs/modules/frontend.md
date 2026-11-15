@@ -1,6 +1,6 @@
 # 模块详解：Web 前端（templates/index.html）
 
-> 本文档详解唯一前端页面。修改 `templates/` 下文件前须先读取 `docs/skills/frontend.md`。
+> 本文档详解唯一前端页面。修改 `templates/` 下文件前须先读取 `docs/skills/!dev.md` 与本文档。
 > 代码变化时须按 `docs/doc-maintenance.md` 同步更新本文档与 `docs/api.md`（接口消费关系变化时）。
 
 ## 1. 概述

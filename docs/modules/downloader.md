@@ -1,6 +1,6 @@
 # 模块详解：音乐下载器（music_downloader.py）
 
-> 本文档详解下载与元数据写入模块。修改该文件前须先读取 `docs/skills/backend-code.md`。
+> 本文档详解下载与元数据写入模块。修改该文件前须先读取 `docs/skills/!dev.md` 与本文档。
 > 下载链路整体数据流见 `docs/data-flow.md` 第 4、5 节。代码变化时须按 `docs/doc-maintenance.md` 同步更新。
 
 ## 1. 模块职责

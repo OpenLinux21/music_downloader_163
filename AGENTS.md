@@ -20,7 +20,7 @@
 2. 文档与沟通内容必须以代码实证为准，严禁编造事实；无法确认的内容必须标记为「待确认」并登记到 `docs/knowledge-base.md`。
 3. 不得为生成文档擅自修改业务代码、改变程序行为、重构项目或安装非必要依赖。
 4. 凭据安全红线：禁止将任何 Cookie、密钥、凭据、环境变量值、日志文件（`music_api.log`）、下载产物（`downloads/`）加入 Git 提交。注意：`cookie.txt` 目前被 Git 跟踪，提交前必须检查暂存区。
-5. 必须遵守 `docs/skills/!core-rules.md` 中的强制规则（该文件在任何任务开始前必须完整读取）。
+5. 必须遵守第 5 节定义的 `docs/skills/` 技能文件加载规则，凡强制文件必须完整读取并遵守。
 
 ## 3. Git 工作流程
 
@@ -51,13 +51,9 @@
 
 ## 5. docs/skills/ 技能文件加载规则
 
-1. `docs/skills/` 下的 Markdown 文件是按开发任务加载的专项技能与约束文档。
-2. **任何文件名以英文感叹号 `!` 开头的 Markdown 文件，无论当前任务是什么，都必须在开展工作前完整读取并遵守**。当前强制文件：`docs/skills/!core-rules.md`。
-3. 其余技能文件根据当前任务判断加载：
-   - 修改任何 `.py` 文件前：读取 `docs/skills/backend-code.md`；
-   - 新增或修改对外 HTTP 接口前：读取 `docs/skills/api-design.md`；
-   - 修改 `Dockerfile`、`docker-compose.yml`、`.env`、`entrypoint.sh`、`requirements.txt` 前：读取 `docs/skills/deployment.md`；
-   - 修改 `templates/` 下前端文件前：读取 `docs/skills/frontend.md`。
+1. `docs/skills/` 下的 Markdown 文件是专项技能与约束文档。
+2. **任何文件名以英文感叹号 `!` 开头的 Markdown 文件，无论当前任务是什么，都必须在开展工作前完整读取并遵守**。当前该目录下唯一强制文件：`docs/skills/!dev.md`（极简工程师原则）。
+3. 修改代码与文档前的具体必读材料，由 `docs/` 下对应模块文档的引言块指定；新增技能文件须经用户授权，放置后登记到 `docs/doc-maintenance.md` 的「文档登记处」，以 `!` 开头的新文件自动纳入强制加载范围，无需修改本文件。
 
 ## 6. 文档同步维护原则
 

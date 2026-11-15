@@ -41,7 +41,7 @@
 
 决策：每个业务路由同时注册 `/song` 与 `/Song_V1`、`/search` 与 `/Search` 等，视图函数共用。
 动机：兼容早期已对外发布的旧路径。
-影响：新增接口时应遵循同一模式（见 `docs/skills/api-design.md`）。
+影响：新增接口时应遵循同一模式（见 `docs/modules/service.md` 第 8 节修改注意事项）。
 
 ### 2.5 下载后处理用外部 ffmpeg
 

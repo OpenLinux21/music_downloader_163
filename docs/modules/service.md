@@ -1,6 +1,6 @@
 # 模块详解：Web 服务层（main.py）
 
-> 本文档详解 `main.py` 的内部实现。修改该文件前须先读取 `docs/skills/backend-code.md`；涉及对外接口时同时读取 `docs/skills/api-design.md`。
+> 本文档详解 `main.py` 的内部实现。修改该文件前须先读取 `docs/skills/!dev.md` 与本文档；涉及对外接口变化时还须同步 `docs/api.md` 与 `docs/modules/frontend.md`（映射规则见 `docs/doc-maintenance.md`）。
 > 接口的对外行为（参数/响应/错误码）以 `docs/api.md` 为准，本文聚焦内部实现。代码变化时须按 `docs/doc-maintenance.md` 同步更新。
 
 ## 1. 模块职责
