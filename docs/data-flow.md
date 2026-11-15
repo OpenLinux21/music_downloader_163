@@ -171,6 +171,11 @@ finally：删除封面临时文件（已落盘 cover.jpg 不删）与残留 .tag
   或 python qr_login.py login → save_cookie()：备份旧值（cookie.backup.backup.时间戳.txt）
       → 经 config_loader.save_default_cookie 写回 config.toml → 校验含 MUSIC_U/__csrf/NMTID 任一关键字段
 
+【请求级用户凭据（2026-11-15 新增，仅 /download）】
+  前端 localStorage（netease_user_cookie）→ 随下载请求 body 字段 user_cookie 发送
+  → 路由层 parse_cookie_string 内存解析 → 传给下载器本次上游调用 → 请求结束即丢弃
+  → 严禁落盘/写日志/写 DB；缓存命中时不消耗凭据；无凭据回落默认 Cookie
+
 【读取侧（每请求执行，无缓存）】
   load_cookies()
     → config_loader.get_default_cookie() 实时读取 config.toml（文件缺失/未配置返回空串，不抛异常）

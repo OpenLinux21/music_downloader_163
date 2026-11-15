@@ -22,7 +22,7 @@ try:
         NeteaseAPI, APIException, QualityLevel,
         url_v1, name_v1, lyric_v1, search_music,
         playlist_detail, album_detail,
-        load_cookies,
+        load_cookies, parse_cookie_string,
     )
     from music_downloader import MusicDownloader, DownloadException, AudioFormat
     from storage_manager import StorageManager
@@ -510,9 +510,16 @@ def download_music_api():
 
         music_id = api_service._extract_music_id(music_id)
 
-        # 下载（内部含缓存命中复用与首次下载登记）
+        # 请求级用户凭据：仅在内存中解析并用于本次下载的上游调用，
+        # 随请求结束丢弃——严禁落盘、写日志、写 DB（日志中间件不记录请求体）
+        user_cookie = (data.get('user_cookie') or '').strip()
+        request_cookies = parse_cookie_string(user_cookie) if user_cookie else None
+
+        # 下载（内部含缓存命中复用与首次下载登记；无用户凭据时使用 config 默认 Cookie）
         try:
-            download_result = api_service.downloader.download_music_file(music_id, quality)
+            download_result = api_service.downloader.download_music_file(
+                music_id, quality, cookies=request_cookies
+            )
         except DownloadException as e:
             api_service.logger.error(f"下载异常: {e}")
             return APIResponse.error(f"下载失败: {str(e)}", 404)

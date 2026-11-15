@@ -247,10 +247,16 @@ class MusicDownloader:
 
     # ----------- 信息获取 -----------
 
-    def get_music_info(self, music_id: int, quality: str = "standard") -> MusicInfo:
-        """获取音乐详细信息（同步）"""
+    def get_music_info(self, music_id: int, quality: str = "standard",
+                       cookies: Optional[Dict[str, str]] = None) -> MusicInfo:
+        """获取音乐详细信息（同步）
+
+        cookies: 请求级用户凭据（None 时使用 config.toml 默认 Cookie），
+        仅在本次调用内使用，调用方负责生命周期。
+        """
         try:
-            cookies = load_cookies()
+            if cookies is None:
+                cookies = load_cookies()
 
             url_result = self.api.get_song_url(music_id, quality, cookies)
             if not url_result.get("data") or not url_result["data"]:
@@ -391,8 +397,9 @@ class MusicDownloader:
         self,
         music_id: int,
         quality: str = "standard",
+        cookies: Optional[Dict[str, str]] = None,
     ) -> DownloadResult:
-        """同步下载音乐到本地存储（命中缓存直接复用，不重复下载）"""
+        """同步下载音乐到本地存储（命中缓存直接复用；cookies 为请求级用户凭据，见 get_music_info）"""
         try:
             music_id = int(music_id)
 
@@ -412,7 +419,7 @@ class MusicDownloader:
                 self.logger.warning(f"缓存文件哈希校验未通过，删除并重新下载: {cached}")
                 self.storage.invalidate_file(music_id, quality)
 
-            music_info = self.get_music_info(music_id, quality)
+            music_info = self.get_music_info(music_id, quality, cookies=cookies)
             file_path = self._build_file_path(music_info)
 
             # 下载到临时文件（按配置单流/多线程 + 限速），完成后原子改名
@@ -523,8 +530,9 @@ class MusicDownloader:
         self,
         music_id: int,
         quality: str = "standard",
+        cookies: Optional[Dict[str, str]] = None,
     ) -> DownloadResult:
-        """异步下载音乐到本地存储（命中缓存直接复用）"""
+        """异步下载音乐到本地存储（命中缓存直接复用；cookies 语义同同步路径）"""
         try:
             music_id = int(music_id)
 
@@ -543,7 +551,7 @@ class MusicDownloader:
                 self.logger.warning(f"缓存文件哈希校验未通过，删除并重新下载: {cached}")
                 self.storage.invalidate_file(music_id, quality)
 
-            music_info = self.get_music_info(music_id, quality)
+            music_info = self.get_music_info(music_id, quality, cookies=cookies)
             file_path = self._build_file_path(music_info)
 
             tmp_path = file_path.with_name(file_path.name + ".part")

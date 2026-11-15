@@ -156,6 +156,13 @@
                     </div>
                     <div id="download-area" style="display:none;">
                         <div class="mb-3">
+                            <label for="user_cookie" class="form-label">个人 Cookie（可选，高音质下载用）
+                                <small class="text-muted d-block">仅保存在本浏览器 localStorage，随下载请求发送，服务器不做任何持久化</small>
+                            </label>
+                            <input type="password" id="user_cookie" class="form-control" autocomplete="off"
+                                   placeholder="粘贴你的网易云音乐 Cookie（k1=v1; k2=v2 格式）">
+                        </div>
+                        <div class="mb-3">
                             <label for="download_id" class="form-label">音乐ID或URL</label>
                             <input type="text" id="download_id" class="form-control" placeholder="输入音乐ID或网易云音乐链接">
                         </div>
@@ -593,6 +600,19 @@
                 }, 'json');
             });
 
+            // 个人 Cookie：仅存于浏览器 localStorage，随下载请求发送（服务器不持久化）
+            const USER_COOKIE_KEY = 'netease_user_cookie';
+            const $cookieInput = $('#user_cookie');
+            $cookieInput.val(localStorage.getItem(USER_COOKIE_KEY) || '');
+            $cookieInput.on('input', function() {
+                const v = $(this).val().trim();
+                if (v) {
+                    localStorage.setItem(USER_COOKIE_KEY, v);
+                } else {
+                    localStorage.removeItem(USER_COOKIE_KEY);
+                }
+            });
+
             // 音乐下载功能
             $('#download-btn').on('click', function() {
                 const musicId = $('#download_id').val().trim();
@@ -659,8 +679,9 @@
                     $('#download-btn').prop('disabled', false).text('下载音乐');
                 };
                 
-                // 发送请求
-                const formData = `id=${encodeURIComponent(processedId)}&quality=${encodeURIComponent(quality)}`;
+                // 发送请求（用户 Cookie 随请求发送，服务器仅在本次下载内存中使用）
+                const userCookie = localStorage.getItem(USER_COOKIE_KEY) || '';
+                const formData = `id=${encodeURIComponent(processedId)}&quality=${encodeURIComponent(quality)}&user_cookie=${encodeURIComponent(userCookie)}`;
                 xhr.send(formData);
             });
 
