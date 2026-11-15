@@ -1,80 +1,54 @@
-# 模块详解：Web 前端（templates/index.html）
+# 模块详解：Web 前端（frontend/，React + Vite + AntD）
 
-> 本文档详解唯一前端页面。修改 `templates/` 下文件前须先读取 `docs/skills/!dev.md` 与本文档。
-> 代码变化时须按 `docs/doc-maintenance.md` 同步更新本文档与 `docs/api.md`（接口消费关系变化时）。
+> 本文档详解 `frontend/` 前端工程。修改前端前须先读取 `docs/skills/!dev.md` 与本文档；接口消费变化时同步 `docs/api.md`。
+> 2026-11-16 由 jQuery 单文件页面（templates/index.html，已删除）重写为 React 工程。
 
-## 1. 概述
+## 1. 工程结构
 
-单文件前端应用（687 行 HTML/CSS/JS），无构建步骤、无独立 JS/CSS 文件，由 `/` 路由经 `render_template` 返回。页面标题「网易云音乐工具箱」。
+```text
+frontend/
+├── index.html            # Vite 入口 HTML（#root 挂载点）
+├── vite.config.js        # 构建配置（outDir=dist；开发模式 API 代理到 127.0.0.1:5000）
+├── package.json / package-lock.json   # 依赖锁定（npm ci 可复现构建）
+└── src/
+    ├── main.jsx          # React 挂载 + ConfigProvider（中文语言包，主色 #c20c0c）
+    ├── App.jsx           # 全部页面组件（Layout + Tabs + 排行榜卡片）
+    ├── api.js            # 统一 API 封装（getJSON/postJSON/downloadMusic/Cookie 存取）
+    └── styles.css        # 少量全局样式
+```
 
-## 2. 外部依赖（CDN）
+- 技术栈：React 19 + Ant Design 5 + Vite 7；依赖经 npm 安装后本地打包，**无 CDN 外链**。
+- 构建：`npm install && npm run build` → 产物 `frontend/dist/`（`node_modules/`、`dist/` 均被 .gitignore 排除）。
+- 托管：FastAPI 的 `/` 返回 `dist/index.html`，`/assets` 挂载静态资源；dist 缺失时 `/` 返回 503 提示构建。
+- 开发：`npm run dev` 启动 Vite（端口 5173），API 请求经 vite proxy 转发到本地后端。
 
-均加载自 `mirrors.sustech.edu.cn` CDN，内网/离线环境不可用：
+## 2. 页面与功能（覆盖全部服务能力）
 
-| 库 | 版本 | 用途 |
+顶部 Tabs：歌曲搜索 / 单曲解析 / 歌单解析 / 专辑解析 / 音乐下载；页面底部固定「下载排行榜」卡片。
+
+| 区块 | 调用 | 说明 |
 | --- | --- | --- |
-| Bootstrap | 5.1.3（CSS + JS bundle） | 布局与组件（含大图 Modal） |
-| jQuery | 3.7.1 | DOM 操作与 AJAX |
-| APlayer | 1.10.1 | 音频播放器（含歌词滚动） |
+| 歌曲搜索 | `POST /search` | 关键词 → 表格（歌曲/歌手/专辑），每行可「去解析」「去下载」（回填 ID 并切 Tab） |
+| 单曲解析 | `POST /song`（`type=json`） | ID/链接 → 信息卡（歌名/歌手/专辑/音质/大小 + `<audio>` 试听 + 歌词框）；`url` 直链可打开 |
+| 歌单解析 | `GET /playlist` | 歌单名/曲目数 + 曲目表格 |
+| 专辑解析 | `GET /album` | 专辑名/描述 + 曲目表格 |
+| 音乐下载 | `POST /download`（`fetch` XHR 等价的 blob 方案见 `api.js`） | 见第 4 节 |
+| 下载排行榜 | `GET /rank` | 页面加载拉取，TOP 20 列表（徽标名次 + 「N 人下载」）；空榜隐藏 |
 
-## 3. 功能模式与界面结构
+链接预处理：`song?id=`、`playlist?id=`、`album?id=` 由前端正则提取 ID（与后端 `_extract_music_id` 口径一致，后端仍兜底解析）。
 
-顶部下拉「功能选择」切换五种模式，互斥显示对应输入区：
+## 3. 个人 Cookie
 
-| 模式值 | 界面 | 输入 |
-| --- | --- | --- |
-| `search` | 关键词 + 返回数量（默认 10，1~50） | 搜索关键词 |
-| `parse` | 歌曲 ID/URL + 音质下拉（8 项含 dolby，默认 standard） | 单曲解析 |
-| `playlist` | 歌单 ID/链接 | 歌单解析 |
-| `album` | 专辑 ID/链接 | 专辑解析 |
-| `download` | 音乐 ID/URL + **个人 Cookie 输入（可选，localStorage 持久）** + 音质下拉（默认 lossless）+ 进度条占位 | 音乐下载 |
+- `#user_cookie` 密码输入框 + 清除按钮，实时同步 `localStorage('netease_user_cookie')`（api.js 的 `getUserCookie/setUserCookie`）；
+- 下载请求以 `user_cookie` 字段随 JSON body 发送；凭据不进入 document.cookie、不经 URL 传递、服务器不持久化。
 
-结果区：单曲信息卡（歌名/歌手/专辑/音质/大小/大图按钮/下载链接/歌词框/APlayer 播放器）、搜索结果列表、歌单与专辑卡片（封面/名称/创建者或歌手/描述/曲目列表，每项带「解析」「下载」按钮）。
+## 4. 下载实现细节
 
-## 4. 与后端的接口调用（全部实际调用点）
+`api.js` 的 `downloadMusic`：XHR（`responseType=blob`）`POST /download`（JSON body：id/quality/user_cookie）；成功后从 `X-Download-Filename`（URL 编码）解码服务端实际文件名（按真实音频格式，如 `歌名.flac`），`URL.createObjectURL` + 隐藏 `<a>` 触发浏览器保存；失败解析 JSON 错误体并经 antd message 提示。下载成功后自动 `GET /recommend?song_id=` 渲染智能推荐卡片（名称/歌手 + 缓存音质 Tag 含大小 + 「填入下载」按钮）。
 
-| 交互 | 请求 | 请求体/参数 | 消费字段 |
-| --- | --- | --- | --- |
-| 搜索按钮 | `POST /Search`（表单） | `keyword`、`limit` | `data[].id/name/artists/album/picUrl`（`artists` 为 `/` 分隔串） |
-| 解析按钮 | `POST /Song_V1`（`$.post` 表单） | `url`（ID 或链接原样传入）、`level`、`type=json` | `data.name/ar_name/al_name/level/size/lyric/tlyric/url/pic` |
-| 歌单解析 | `GET /Playlist` | `id`（先正则 `playlist\?id=(\d+)` 提取） | `data.playlist.coverImgUrl/name/creator/description/trackCount/tracks[]` |
-| 专辑解析 | `GET /Album` | `id`（正则 `album\?id=(\d+)`） | `data.album.coverImgUrl/name/artist/description/songs[]` |
-| 下载按钮 | `POST /Download`（XHR，表单编码） | `id`（先正则 `song\?id=(\d+)` 提取）、`quality`、`user_cookie`（2026-11-15 新增：取自 `#user_cookie` 输入框，实时写入 `localStorage('netease_user_cookie')`，页面加载时回填）；`responseType=blob` | 音频二进制流 + 响应头 `X-Download-Message`、`X-Download-Filename`（解码后作为保存文件名） |
+## 5. 修改注意事项
 
-注意：`/Song_V1` 的 `url` 参数不做前端解析直接传后端（后端 `_extract_music_id` 处理）；而歌单/专辑/下载是前端先行提取 ID。列表中的「下载」按钮不直接请求接口，只把 ID 填入下载区并切换到下载模式，由用户再点「下载音乐」。
-
-## 5. 关键前端算法
-
-### 5.1 LRC 解析与翻译合并
-
-- `lrctrim(lyrics)`：逐行匹配 `[mm:ss.xx]` 时间戳（毫秒），剥离标签、压缩空白，返回 `[时间戳, 行号, 文本]` 数组并按时间排序。
-- `lrctran(lyric, tlyric)`：双指针按时间戳对齐原文与翻译，命中时追加 ` (翻译：xxx)`；最后重新格式化为标准 LRC 文本。
-- 解析成功后歌词写入歌词框（`<br>` 换行）并作为 `lrc` 传给 APlayer（`lrcType: 1` 文本模式）。
-
-### 5.2 链接/ID 提取
-
-- `extractLinks`：正则取文本中首个 `https?://` 链接；
-- `checkValidLink`：须含 `http` 且含 `music.163.com` 或 `163cn.tv`；
-- `extractAndCheckId`：链接合法用链接（交给后端解析），否则取首个纯数字串（当前解析按钮路径实际未使用该函数，`/Song_V1` 直接传原文）。
-
-### 5.3 下载实现细节
-
-使用 `XMLHttpRequest`（非 jQuery）以便读取自定义响应头与 blob：`POST /Download`（`application/x-www-form-urlencoded`），成功后从 `X-Download-Filename`（URL 编码）解码文件名，用 `URL.createObjectURL` + 隐藏 `<a>` 触发浏览器保存；下载期间禁用按钮并显示进度条动画（装饰性，无真实进度）。
-
-个人 Cookie（2026-11-15 新增）：输入框实时同步 `localStorage('netease_user_cookie')`（清空输入即移除），下载请求以 `user_cookie` 字段随 body 发送；凭据不进入任何 Cookie（document.cookie）也不经 URL 传递。
-
-智能推荐（2026-11-15 新增）：下载完成后自动 `GET /recommend?song_id=` 拉取并渲染推荐区块（最多 5 首，每首展示名称/歌手 + 缓存音质版本与文件大小 badge，附「下载」按钮回填下载区）；无推荐时隐藏区块。
-
-## 6. 已知缺陷与注意点
-
-1. **错误提示分支失效**（知识库已知问题 #8）：各请求失败分支读取 `data.data.msg`，但后端错误响应（`APIResponse.error`）不含 `data` 字段，会抛 `TypeError`，用户看不到错误原因。修改错误结构或前端时必须两边同步。
-2. `else` 分支（成功但 `status !== 200`）同样访问 `data.data.msg`，后端该场景下 `data` 亦缺失。
-3. 每次解析都会 `new APlayer` 但不销毁旧实例，重复解析会叠加播放器实例。
-4. 解析按钮把用户输入原样作为 `url` 传给 `/Song_V1`，依赖后端解析逻辑；若后端解析规则变化需回归此处。
-5. 页脚作者署名与外链为历史内容，属界面文案。
-
-## 7. 修改注意事项
-
-1. 接口路径、参数名、响应字段必须与 `docs/api.md` 保持一致；后端接口变更时按映射表同步本文档第 4 节。
-2. 新增音质选项需同时更新「解析」与「下载」两个下拉框（硬编码 option）。
-3. CDN 依赖变化时同步 `docs/architecture.md` 技术栈表与 `docs/deployment.md` 网络要求。
+1. 接口契约变化须同步 `docs/api.md` 与本文档；响应统一结构 `{status, success, message, data}` 的消费在 `api.js` 集中处理（错误经 antd message 展示——修复了旧页面 `data.data.msg` 缺陷，知识库已知问题 #8 已随重写关闭）。
+2. 新增音质选项：更新 `App.jsx` 的 `QUALITIES` 数组（与后端白名单、`docs/api.md` 第 3 节同步）。
+3. 新增依赖须固定版本（`package-lock.json` 提交，`npm ci` 构建可复现）。
+4. XSS 注意：上游返回的歌曲名/歌手等字符串直接渲染为 JSX 文本（React 自动转义），不得改为 `dangerouslySetInnerHTML`。

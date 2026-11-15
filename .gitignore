@@ -26,3 +26,7 @@ cookie.backup.*.txt
 # 运行产物（音乐存储与历史下载产物，禁止提交）
 storage/
 downloads/
+
+# React 前端（源码提交，构建产物与依赖不入库）
+frontend/node_modules/
+frontend/dist/

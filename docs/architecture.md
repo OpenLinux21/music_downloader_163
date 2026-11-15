@@ -25,16 +25,16 @@ Netease_url/
 ├── logger.py               # 统一日志模块：GIN 风格格式（控制台彩色 + logs/service.log 轮转）
 ├── config.example.toml     # 配置模板（提交 Git，Cookie 留空）
 ├── config.toml             # 本地配置（含服务器默认 Cookie，已被 .gitignore 排除，禁止提交）
-├── templates/
-│   └── index.html          # 唯一前端页面（jQuery + Bootstrap + APlayer，单文件应用）
+├── frontend/                # React + Vite + AntD 前端工程（源码提交；dist/node_modules 不入库）
+│   ├── index.html / vite.config.js / package.json / package-lock.json
+│   └── src/                 # App.jsx（页面组件）、api.js（API 封装）、main.jsx、styles.css
 ├── requirements.txt        # Python 依赖（33 个包，全部固定版本；2026-11-15 移除 Flask 系，新增 FastAPI/uvicorn/slowapi）
-├── Dockerfile              # python:3.12-alpine3.23 + ffmpeg
+├── Dockerfile              # 多阶段构建：node:22-alpine 构建前端 → python:3.12-alpine3.23 + ffmpeg 运行
 ├── docker-compose.yml      # 单服务编排（可选挂载 config.toml）
 ├── entrypoint.sh           # 容器启动脚本：生成默认配置后调用 python3 start.py
 ├── README.md / 使用文档.md  # 面向使用者的说明（部分内容与代码存在出入，以本文档体系为准）
 ├── tests/                  # 断言式自检脚本（无测试框架，直接运行）
-├── downloads/              # 遗留下载产物目录（2026-11-15 起由 storage/ 取代，无新写入，已 gitignore）
-├── storage/                # 音乐存储与元数据库（运行时生成，按歌曲 ID 分类，已 gitignore）
+├── downloads/              # 遗留下载产物目录（2026-11-15 起由 storage/ 取代，无新写入，已 gitignore）├── storage/                # 音乐存储与元数据库（运行时生成，按歌曲 ID 分类，已 gitignore）
 └── logs/                   # 统一日志目录（service.log + 轮转备份，已被 .gitignore 覆盖）
 ```
 
@@ -42,25 +42,25 @@ Netease_url/
 
 | 类别 | 内容 | 依据 |
 | --- | --- | --- |
-| 语言 | Python 3.12（本机 `.venv` 实测 3.12.16；Docker 镜像 `python:3.12-alpine3.23`） | `.venv/lib/python3.12/`、`Dockerfile` |
+| 语言 | Python 3.12（本机 `.venv` 实测 3.12.16；Docker 运行镜像 `python:3.12-alpine3.23`）；前端构建 Node 22（Docker 多阶段 `node:22-alpine`） | `.venv/lib/python3.12/`、`Dockerfile` |
 | Web 框架 | FastAPI 0.163.0（ASGI，uvicorn 0.54.0 托管，`access_log` 关闭由统一日志单点输出；路由为同步 `def`，FastAPI 自动入线程池）+ slowapi 0.1.10 按来源 IP 限速 | `main.py`、`start.py` 的 `start_service()` |
 | 上游 HTTP | requests 2.28.2（同步）、aiohttp 3.12.15 + aiofiles 24.1.0（异步下载） | `requirements.txt` |
 | 加密 | cryptography 40.0.2（AES-ECB + PKCS7，用于 eapi 参数加密） | `music_api.py` 的 `CryptoUtils` |
 | 二维码 | qrcode 8.2（终端 ASCII 二维码） | `music_api.py` 的 `QRLoginManager.create_qr_login()` |
 | 音频处理 | ffmpeg（系统二进制，非 Python 包；Docker 内通过 `apk add ffmpeg` 安装） | `Dockerfile`、`music_downloader.py` |
-| 前端 | jQuery 3.7.1、Bootstrap 5.1.3、APlayer 1.10.1（均加载自 `mirrors.sustech.edu.cn` CDN） | `templates/index.html` |
+| 前端 | React 19 + Ant Design 5 + Vite 7（npm 构建，资源本地打包，**无 CDN 外链依赖**）；产物 `frontend/dist` 由 FastAPI 托管（`/` 与 `/assets`） | `frontend/`、`main.py` 的 `FRONTEND_DIST` |
 | 配置 | TOML，标准库 `tomllib` 解析；`config.toml` 为唯一配置来源（缺省回落内置默认值） | `config_loader.py` |
 | 日志 | 标准库 `logging` + 自研 GIN 风格 formatter：控制台（ANSI 着色）+ `logs/service.log`（5MB 轮转 ×3，无着色） | `logger.py` |
 | 存储 | sqlite3 标准库（`storage/root.db`：songs/files 表 + `storage/sha256sum.db`：file_hashes 哈希表，无 ORM）+ 按歌曲 ID 分类目录；`main.py` 引入时新建设计文档 `docs/database.md` | `storage_manager.py` |
 
-依赖全部在 `requirements.txt` 中固定版本，无数据库驱动、无 ORM、无任务队列、无测试框架、无 CI 配置。
+依赖全部在 `requirements.txt` 中固定版本，无数据库驱动、无 ORM、无任务队列、无 CI 配置；Python 侧无测试框架（自检脚本见 `tests/`），前端经 `vite build` 验证。
 
 ## 4. 模块依赖关系
 
 ```text
                     ┌─────────────────────────────┐
-                    │  templates/index.html       │  浏览器前端
-                    │  (jQuery AJAX 调用 HTTP API) │
+                    │  frontend/dist (React 构建)  │  浏览器前端
+                    │  (AntD 组件 fetch 调用 API)  │
                     └──────────────┬──────────────┘
                                    │ HTTP (GET/POST)
                                    ▼

@@ -26,6 +26,7 @@
 | FastAPI 迁移 | `feat/fastapi-migration` 分支（2026-11-15） | Flask → FastAPI（uvicorn）；大写别名移除；slowapi 限速；依赖清单重构 |
 | 排行榜与防刷 | `feat/ranking-antispam` 分支（2026-11-15） | HMAC 防刷会话 Cookie + cookies.db 交付去重 + `/rank` TOP20 排行榜 |
 | 智能推荐 | `feat/smart-recommend` 分支（2026-11-16） | `/recommend` 特征打分推荐（同歌手/近似名/同专辑/热门兜底）+ 前端推荐区块 |
+| React 前端重写 | `feat/react-frontend` 分支（2026-11-16） | React 19 + AntD 5 + Vite 7 重写全部页面（无 CDN）；FastAPI 托管 dist；Docker 多阶段构建 |
 
 ## 2. 重要设计决策及动机（依据代码现状推断与提交记录）
 
@@ -134,6 +135,12 @@
 决策：推荐完全基于 `root.db` 特征数据离线计算（无独立推荐库/向量服务）：候选池为缓存中已有歌曲（排除自身），打分 = 同歌手 +3、歌名 difflib 相似度（阈值 0.55）+ 相似度×2、同专辑 +1，不足 5 首按访问量降序热门兜底；`GET /recommend`（限速内）即时计算返回，每项 qualities 列出实际缓存音质版本与文件大小；前端在下载完成后自动拉取渲染推荐区块。
 动机：用户下载相同/近似/同歌手歌曲时给出可直接命中的缓存内容，形成「下载 → 发现 → 再下载」闭环；推荐项天然可命中缓存（第四步的缓存键与大小数据直接复用）。
 取舍：相似度用标准库 difflib 字符串比序（无分词/拼音/语义，中文近似判定为字符级，精细语义匹配属未来演进）；推荐范围限于已缓存歌曲（未缓存歌曲无法标注音质版本与大小，不符合本步展示要求）。
+
+### 2.18 React 前端重写（2026-11-16，feat/react-frontend）
+
+决策：以 `frontend/` 工程（React 19 + AntD 5 + Vite 7）重写全部页面，覆盖搜索、单曲解析、歌单解析、专辑解析、下载（服务端实际格式命名保存）、个人 Cookie（localStorage）、排行榜、智能推荐八项能力；依赖经 npm 安装本地打包（摆脱旧页面的外网 CDN 依赖），`package-lock.json` 提交保证 `npm ci` 可复现；`frontend/dist` 由 FastAPI 托管（`/` 返回 index.html、`/assets` 静态挂载、dist 缺失返回 503 构建提示）；Dockerfile 改多阶段（node:22-alpine 构建 → python 运行镜像拷贝 dist）；旧 jQuery 单文件页面与 templates/ 目录删除。
+取舍：dist 与 node_modules 不入 Git（部署时构建，用户确认）；播放器用原生 `<audio>` 替代 APlayer（最小依赖）；bundle 约 1MB（antd 全量引入，个人工具规模可接受，代码分割属未来演进）；错误处理集中在 `api.js` 解析统一响应结构，顺带消除旧页面 `data.data.msg` 缺陷（知识库已知问题 #8）。
+风险边界：UI 交互（Tabs 切换、表单校验、下载保存对话框）经构建成功 + 托管断言验证，浏览器端人工冒烟未执行（无 GUI 环境），由用户按「使用文档」实际操作确认。
 
 ## 3. 历史遗留与不一致（详见 docs/knowledge-base.md）
 

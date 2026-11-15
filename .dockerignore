@@ -8,3 +8,7 @@ cookie.txt
 cookie.txt.backup.*
 cookie.txt.logout.*
 cookie.backup.*.txt
+
+# 前端依赖与构建产物（镜像构建阶段自行生成）
+frontend/node_modules
+frontend/dist
