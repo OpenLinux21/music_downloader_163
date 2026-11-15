@@ -43,10 +43,11 @@ def test_hit_ignores_cookie(tmp: Path) -> None:
         raise AssertionError("缓存命中不应触达上游（凭据也无须使用）")
     dl.get_music_info = _forbid
     try:
-        client = main.app.test_client()
+        from fastapi.testclient import TestClient
+        client = TestClient(main.app)
         r = client.post("/download", json={"id": str(song_id), "quality": "standard",
                                            "format": "json", "user_cookie": SENTINEL})
-        assert r.get_json()["data"]["cached"] is True
+        assert r.json()["data"]["cached"] is True
     finally:
         del dl.get_music_info  # 还原实例方法
     print("通过: 缓存命中时凭据与上游均未被使用")
@@ -64,7 +65,8 @@ def test_miss_passes_cookie(tmp: Path) -> None:
 
     dl.get_music_info = _capture
     try:
-        client = main.app.test_client()
+        from fastapi.testclient import TestClient
+        client = TestClient(main.app)
         r1 = client.post("/download", json={"id": "999001", "quality": "lossless",
                                             "format": "json", "user_cookie": SENTINEL})
         assert r1.status_code == 404
@@ -109,7 +111,8 @@ def test_end_to_end_upstream(tmp: Path) -> None:
     """真实上游（用户已授权）：哨兵 Cookie 请求 hires（预期上游拒绝无效凭据）"""
     import main
     sm = main.api_service.storage
-    client = main.app.test_client()
+    from fastapi.testclient import TestClient
+    client = TestClient(main.app)
     song_id, quality = 347230, "hires"
     sm.invalidate_file(song_id, quality)
 
@@ -117,7 +120,7 @@ def test_end_to_end_upstream(tmp: Path) -> None:
                                        "format": "json", "user_cookie": SENTINEL})
     # 无效凭据下上游大概率拒绝（404/500）；若上游降级返回了 URL 也不算失败——
     # 断言核心是凭据参与了本次上游调用且未持久化
-    assert r.status_code in (200, 404, 500), f"意外状态码 {r.status_code}: {r.get_data()[:200]}"
+    assert r.status_code in (200, 404, 500), f"意外状态码 {r.status_code}: {r.content[:200]}"
     print(f"通过: 端到端上游调用完成（HTTP {r.status_code}，哨兵凭据仅内存使用）")
 
     # 若上游意外降级成功，清理脏缓存避免假 hires 内容留存

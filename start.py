@@ -21,7 +21,9 @@ CONFIG_FILE = "config.toml"
 
 # 运行时关键依赖（模块名, 展示名），与 requirements.txt 对应，不含传递依赖
 REQUIRED_MODULES = [
-    ("flask", "Flask"),
+    ("fastapi", "FastAPI"),
+    ("uvicorn", "uvicorn"),
+    ("slowapi", "slowapi"),
     ("requests", "requests"),
     ("aiohttp", "aiohttp"),
     ("aiofiles", "aiofiles"),
@@ -36,10 +38,10 @@ def _report(name: str, ok: bool, detail: str = "") -> None:
     """逐行输出一项检查结果（检查项名称、通过/失败及原因）"""
     if ok:
         suffix = f"（{detail}）" if detail else ""
-        print(f"[启动检查] {name} ：通过{suffix}")
+        print(f"[启动检查] {name} ：通过{suffix}", flush=True)
     else:
         suffix = f"（{detail}）" if detail else ""
-        print(f"[启动检查] {name} ：失败{suffix}")
+        print(f"[启动检查] {name} ：失败{suffix}", flush=True)
 
 
 # ----------- 检查 1：依赖安装 -----------
@@ -170,11 +172,10 @@ def run_all_checks() -> bool:
 
 
 def start_service() -> None:
-    """初始化服务进程并启动 Flask 应用"""
+    """初始化服务进程并启动 FastAPI/uvicorn 服务"""
     import main  # 通过全部检查后才导入，避免带病初始化
-    from logger import quiet_http_server_logs
+    import uvicorn
 
-    quiet_http_server_logs()
     host, port = main.config.host, main.config.port
 
     print("\n" + "=" * 60)
@@ -183,12 +184,15 @@ def start_service() -> None:
     print(f"📁 存储目录: {main.api_service.storage_path.resolve()}")
     print("📚 API端点: / /health /song /search /playlist /album /download /api/info")
     print("🎵 支持的音质: standard, exhigh, lossless, hires, sky, jyeffect, jymaster, dolby")
+    print(f"🚦 API限速: {main.config.rate_per_minute} 次/分钟, {main.config.rate_per_hour} 次/小时（按来源 IP）")
     print("=" * 60)
     print(f"⏰ 启动时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("🌟 服务已就绪，等待请求...\n")
 
     try:
-        main.app.run(host=host, port=port, debug=False, threaded=True)
+        # access_log 关闭：请求行由统一日志中间件输出，避免重复
+        uvicorn.run(main.app, host=host, port=port,
+                    log_config=None, log_level="warning", access_log=False)
     except KeyboardInterrupt:
         print("\n\n👋 服务已停止")
     except OSError as e:

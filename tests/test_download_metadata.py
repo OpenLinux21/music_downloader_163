@@ -204,9 +204,10 @@ def test_end_to_end(tmp: Path) -> None:
     assert tags["_stream_tags"].get("comment") == "Cover (front)", "封面流标记缺失"
 
     # 路由层缓存命中（哈希校验通过）
-    client = main.app.test_client()
+    from fastapi.testclient import TestClient
+    client = TestClient(main.app)
     r = client.post("/download", json={"id": str(song_id), "quality": quality, "format": "json"})
-    assert r.get_json()["data"]["cached"] is True
+    assert r.json()["data"]["cached"] is True
     print(f"通过: 端到端（exhigh {size}B 限速 512KB/s 实测 {dt:.1f}s，元数据/歌词/封面/哈希命中均验证）")
 
 

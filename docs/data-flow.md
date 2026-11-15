@@ -11,14 +11,14 @@
 客户端请求
    │
    ▼
-before_request：request.environ 记录 perf_counter() 起始时间
+FastAPI 日志中间件：记录 perf_counter() 起始时间
    │
    ▼
-Flask 路由分发（每个业务路由均注册小写/大写别名两条规则）
+路由分发（小写单路径；业务路由经 slowapi 限速装饰器校验来源 IP 配额，超限 429）
    │
    ▼
-_safe_get_request_data()：统一取参
-   ├─ GET  → request.args 字典
+get_request_data 依赖：统一取参
+   ├─ GET  → query_params 字典
    └─ POST → {**表单字段, **JSON 字段}（JSON 同名键覆盖表单）
    │
    ▼
@@ -31,14 +31,14 @@ _get_cookies() → load_cookies()：每次请求都实时读取 config.toml 的 
 调用 music_api 向上游发起请求（超时 30s，业务码非 200 抛 APIException）
    │
    ▼
-整理为前端期望结构 → APIResponse.success / APIResponse.error
+整理为前端期望结构 → APIResponse.success / APIResponse.error（JSONResponse）
    │
    ▼
-after_request：追加 4 个 CORS 头，输出单条 GIN 风格请求行
+日志中间件收尾：输出单条 GIN 风格请求行
 （[SERVER] 时间 | 状态码 | 微秒耗时 | IP | METHOD 路径，见 docs/deployment.md 第 5 节）
 ```
 
-异常处理分工：`APIException` 与一般异常在各路由内捕获并转为 500 响应；Flask 级 `400/404/500` 错误处理器兜底为统一文案。注意：日志只记录路由路径与状态码等元信息，不记录请求体（为用户自带 Cookie 的不落日志约束打底）。
+异常处理分工：`APIException` 与一般异常在各路由内捕获并转为 500 响应；FastAPI 异常处理器兜底（404 路由不存在、未处理异常 → 500 统一文案）。注意：日志只记录路由路径与状态码等元信息，不记录请求体（为用户自带 Cookie 的不落日志约束打底）。
 
 ## 2. ID 与链接解析流（`_extract_music_id`）
 

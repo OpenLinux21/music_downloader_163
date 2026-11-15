@@ -132,8 +132,3 @@ def log_request(
         },
     )
 
-
-def quiet_http_server_logs() -> None:
-    """压制 Flask/Werkzeug 开发服务器自带的逐请求日志行，避免与请求行重复"""
-    logging.getLogger("werkzeug").setLevel(logging.ERROR)
-

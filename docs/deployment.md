@@ -111,7 +111,7 @@ docker run -d -p 5000:5000 -v ./config.toml:/app/config.toml netease-music-api
 
 - 请求行示例：`[SERVER] 2026/11/15 - 22:59:39 | 200 | 233.729µs | 127.0.0.1 | GET /health`；耗时单位微秒、保留 3 位小数。
 - 事件行示例：`[DOWNLOADER] 2026/11/15 - 22:59:38 | WARN | - | - | - | 未检测到 ffmpeg，写入元数据功能将不可用`。
-- 组件：`SERVER`（Web 请求/服务事件，级别读 `config.toml` 的 `log_level`）、`DOWNLOADER`（下载与元数据写入）；Werkzeug 自带逐请求日志被压制（ERROR 级），避免重复。
+- 组件：`SERVER`（Web 请求/服务事件，级别读 `config.toml` 的 `log_level`）、`DOWNLOADER`（下载与元数据写入）；uvicorn 的 access log 已显式关闭（`start.py`），避免与请求行重复；uvicorn 自身日志级别为 warning。
 - `music_api.log` 双写方案已废除；`qr_login.py` 为独立 CLI，仍使用自带 logging 输出。
 
 ## 6. 健康检查与部署验证
@@ -127,4 +127,4 @@ curl -s http://localhost:5000/health
 1. `requirements.txt` 固定了 `requests==2.28.2`、`urllib3==1.26.15`、`cryptography==40.0.2` 等较旧版本，升级依赖属于变更任务，须评估兼容性并同步文档。
 2. Alpine 镜像编译依赖（如 cryptography 的 Rust 工具链）由固定版本保证可用性，更换基础镜像或升级版本前必须重新验证构建。
 3. 前端静态资源（jQuery/Bootstrap/APlayer）加载自 `mirrors.sustech.edu.cn` CDN，内网或离线环境需自行处理资源可达性。
-4. 服务使用 Flask 开发服务器（`app.run(threaded=True)`），适合个人使用，不建议直接暴露公网高并发场景。
+4. 服务由 uvicorn 托管 FastAPI（ASGI 单进程，`access_log` 关闭）；个人使用场景足够，如需公网高并发建议在服务前增加反向代理（如 nginx）并升级限速存储。

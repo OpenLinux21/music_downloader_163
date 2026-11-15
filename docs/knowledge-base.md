@@ -25,7 +25,7 @@
 | MUSIC_U | 网易云登录态 Cookie 字段，服务鉴权的核心凭据 |
 | 音质等级 | `standard`/`exhigh`/`lossless`/`hires`/`jyeffect`/`sky`/`jymaster`/`dolby` 共 8 级（代码实证，见 `docs/api.md`） |
 | 黑胶 VIP / SVIP | 网易云会员等级；README 注明 `sky`、`jymaster` 需要 SVIP（此说法来自 README，代码层面未校验，属上游权限行为） |
-| 兼容路由 | 同一视图函数注册的多个路径别名，如 `/song` 与 `/Song_V1`、`/search` 与 `/Search` 等 |
+| 兼容路由 | 同一视图函数注册的多个路径别名，如 `/song` 与 `/Song_V1`、`/search` 与 `/Search` 等（**2026-11-15 随 FastAPI 迁移已全部移除**，仅保留小写路径） |
 |杜比全景声 | `dolby` 音质，上游返回 mp4 容器（EAC3），下载器单独处理（`+faststart`） |
 
 ## 3. 实证事实清单（代码级验证）
@@ -54,7 +54,7 @@
 16. **二维码登录双实现**：`music_api.QRLoginManager.qr_login()` 为可用实现（终端 ASCII 二维码，轮询 801/802/803 状态码）；`qr_login.py` 的 `QRLoginClient` 提供交互式 CLI，但与现行接口不匹配（见已知问题 #1）。
 17. **Cookie 有效性口径**（`qr_login.py`）：包含 `MUSIC_U`、`__csrf`、`NMTID` 任一字段即视为有效；保存前先备份旧文件。
 18. **前端接口调用**（`templates/index.html`）：搜索 POST `/Search`、解析 POST `/Song_V1`（`type=json`）、歌单 GET `/Playlist`、专辑 GET `/Album`、下载 XHR POST `/Download`（blob 响应，读取 `X-Download-Message`/`X-Download-Filename` 响应头；2026-11-15 起 body 增加 `user_cookie` 字段，取自下载区 Cookie 输入框并持久于 `localStorage('netease_user_cookie')`）。
-19. **CORS 全开放**：`after_request` 对所有响应添加 `Access-Control-Allow-Origin: *` 等 4 个 CORS 头。
+19. **CORS 全开放**：CORSMiddleware 对带 Origin 的跨域请求返回 `Access-Control-Allow-Origin: *` 等 4 个允许头（同源请求不添加，属标准行为）。
 20. **容器时区**：Dockerfile 设置 `TZ=Asia/Shanghai`；pip 使用阿里云镜像源。
 21. **配置加载行为**（`config_loader.py`）：`load_config()` 严格读取（文件缺失抛 `FileNotFoundError`、非法 TOML 抛 `tomllib.TOMLDecodeError`）；`get_config()` 在文件缺失时回落内置默认值并向 stderr 告警，解析错误不吞直接抛出；所有读取无内存缓存，修改配置即时生效。内置默认值：host `127.0.0.1`、port `5000`、`max_size_mb` 8192（MB）、`multi_thread` false、`speed_limit_kb` 0（KB/s，0 不限速）、限速 10 次/分钟 + 25 次/小时。`main.py` 在模块导入时把 `server.host`/`server.port` 接线到 `APIConfig`。
 22. **Cookie 写回与备份**（`config_loader.save_default_cookie` / `qr_login.py`）：写回采用文本替换只改动 `default_cookie` 一行（值经 `json.dumps` 编码，转义规则与 TOML 基本字符串兼容），缺键时插入 `[server]` 节头之后、缺节时文件末尾追加、文件缺失时自动创建最小配置；`qr_login.py` 覆盖/清除前把旧 Cookie 备份为项目根 `cookie.backup.<suffix>.<时间戳>.txt`（已 gitignore），`logout` 通过写空串清除而非删除文件。
@@ -64,6 +64,7 @@
 26. **哈希追踪与完整性校验**（`sha256sum.db`，2026-11-15 落地）：`file_hashes(path PK, sha256, size, song_id, quality, registered_at)` 覆盖 storage 全部文件（音频主文件/专辑副本/封面/歌词，`compute_sha256` 1MB 分块流式计算）；下载落盘即登记（`_post_register`），缓存命中提供前重算比对（`verify_hash`），不一致/无记录判定损坏 → `invalidate_file` 删除该音质主文件与副本、files 行、哈希记录（保留 songs 行与访问量、封面歌词）→ 重新下载 → 重写元数据 → 重登记哈希后再提供；歌曲清理（到期/超限）联动删除哈希记录；校验为每次命中实时重算（约 10MB 文件 < 50ms）。端到端实测：篡改 1 字节后请求 → `cached=false` 重下 → 哈希重新登记通过。升级前存量缓存无哈希记录，首次访问自愈重下一次（本地环境已回填）。
 27. **歌词嵌入与传输层**（2026-11-15 落地）：①歌词嵌入——元数据键 `lyrics`（歌词原文非空时写入），本机 ffmpeg 9.0.2 逐格式 ffprobe 实证：`.mp3`→ID3v2 USLT、`.flac`→Vorbis `LYRICS`、`.m4a`→`©lyr` 三种容器均成功写回（`.ogg`/`.opus`/`.mp4` 未实测，失败不阻断），配合既有 title/artist/album/track/封面，音频文件独立携带完整信息；②多线程下载——`multi_thread` 开启且总大小 > 512KB 时按 4 段 Range 并发（`ThreadPoolExecutor`），分段写入 `.part.p{i}` 后顺序拼接并校验总大小，非 206/分段失败/大小不匹配自动回退单流；③限速——`speed_limit_kb`（KB/s，0 不限速）经 `_RateLimiter` 均匀节流（多线程共享实例），实测 384KB@200KB/s 耗时 1.92s、真实下载 1MB@512KB/s（多线程）2.7s，收敛符合预期；仅同步路径接入，异步/批量预留路径未接入。
 28. **请求级用户凭据**（2026-11-15 落地，仅 `/download`）：前端 Cookie 输入实时同步 `localStorage('netease_user_cookie')` 并随下载 body 字段 `user_cookie` 发送；路由层 `parse_cookie_string` 内存解析后传入 `get_music_info(cookies=…)`（`None` 回落 config 默认 Cookie），请求结束随局部变量丢弃；缓存命中时不使用凭据、不发起上游调用；零持久化经哨兵值实测（日志/root.db/sha256sum.db/storage 全部文件/config.toml 均无残留），带哨兵凭据的真实上游调用后复查同样零残留；日志中间件不记录请求体（第二步设计），凭据天然不进日志。
+29. **FastAPI 迁移要点**（2026-11-15 落地）：①Web 框架 Flask 3.0.3 → FastAPI 0.163.0（uvicorn 0.54.0 托管，`access_log=False`），依赖移除 Flask/Werkzeug/blinker/itsdangerous/Jinja2/MarkupSafe/click/colorama，新增 fastapi/uvicorn/slowapi/httpx 及传递依赖（33 包全固定版本，`pip check` 无冲突）；②路由保持同步 `def`（FastAPI 自动入线程池，与同步上游/sqlite 短连接兼容），统一取参改由 `get_request_data` 异步依赖完成；③**大写别名路由全部移除**（破坏性变更），前端调用同步改小写；④slowapi 按 `get_remote_address` 限速，阈值读 `api.*` 配置，业务五路由叠加分钟/小时双装饰器，`/health` `/api/info` `/` 不限速，超限 429 统一结构；⑤限速存储 `memory://`（单进程语义）；⑥`/` 经 `FileResponse` 托管旧页面过渡，`/docs` 自动文档开放。实测：限速序列 400×9→429（含校验用例消耗 1 次配额）。
 
 ## 4. 外部接口事实（上游依赖）
 
@@ -95,7 +96,7 @@
 | 7 | ~~`downloads/` 目录未被 `.gitignore` 覆盖，下载产物有被误提交的风险~~ **已修复（2026-11-15）**：`.gitignore` 已覆盖 `downloads/` 与 `storage/`（含 root.db 等运行产物） | `.gitignore` | （仓库卫生风险消除） | 提交前仍须检查暂存区（AGENTS.md 凭据红线） |
 | 8 | 前端错误分支访问 `data.data.msg`，而错误响应结构中不存在 `data` 字段（`APIResponse.error` 仅含 `status/success/message`），会抛 `TypeError`，错误提示无法显示 | `templates/index.html` 各 `$.post/$.get` 的失败分支 | 用户看不到具体错误原因 | 修复时需同步 `docs/modules/frontend.md` |
 | 9 | `music_api.py` 与 `music_downloader.py` 重复定义 `QualityLevel` 枚举，且两处均未被业务逻辑实际引用（音质校验用硬编码列表） | 两个模块顶部 | 修改音质列表需多处同步 | 见 `docs/doc-maintenance.md` |
-| 10 | `main.py` 导入的 `QualityLevel`、`AudioFormat` 实际未使用 | `main.py` 顶部 import | 轻微冗余 | 可在重构任务中清理 |
+| 10 | ~~`main.py` 导入的 `QualityLevel`、`AudioFormat` 实际未使用~~ **已修复（2026-11-15）**：FastAPI 重写时移除无效导入 | `main.py` 顶部 import | （轻微冗余已消除） | — |
 
 ## 6. 待确认事项
 
@@ -119,3 +120,4 @@
 | 2026-11-15 | 哈希追踪落地（feat/sha256-tracking）：新增 `storage/sha256sum.db`（file_hashes），storage 全量文件登记 SHA-256；命中前实时校验，损坏失效重下重登记链路；清理联动删除哈希；新增事实 26、`docs/database.md` 第 3 节；新增自检脚本 `tests/test_sha256_tracking.py`（含篡改端到端验证，用户已授权） | AI Agent |
 | 2026-11-15 | 下载与元数据落地（feat/download-metadata）：ffmpeg 元数据新增 `lyrics` 键（mp3/flac/m4a 三格式 ffprobe 实证支持）；新增传输层（4 段 Range 多线程 + 自动回退单流 + `_RateLimiter` KB/s 限速），配置自 `[download]` 接线；附带修复 sha256 端到端测试的篡改写法缺陷（写前未回 seek，产品行为经实证无误）；新增事实 27、`docs/data-flow.md` 第 5 节歌词段；新增自检脚本 `tests/test_download_metadata.py`（含真实限速下载端到端，用户已授权） | AI Agent |
 | 2026-11-15 | 用户自有凭据落地（feat/user-cookie）：`/download` 新增 `user_cookie` 请求级凭据（localStorage → 请求 body → 内存解析 → 本次上游调用 → 请求结束丢弃；零落盘/日志/DB，哨兵值实测验证）；前端下载区新增 Cookie 输入（localStorage 持久）；新增事实 28、改写事实 18；新增自检脚本 `tests/test_user_cookie.py`（含真实上游哨兵端到端，用户已授权） | AI Agent |
+| 2026-11-15 | FastAPI 迁移落地（feat/fastapi-migration）：`main.py` 重写为 FastAPI（uvicorn 托管），移除 Flask 系依赖并新增 fastapi/uvicorn/slowapi/httpx（requirements 全固定版本）；大写别名路由移除（破坏性变更，前端同步改小写）；slowapi 按来源 IP 限速（业务五路由 10/25 双阈值，超限 429 统一结构）；`/` FileResponse 托管旧页面 + `/docs` 开放；已知问题 #10 修复；改写事实 19、新增事实 29；新增自检脚本 `tests/test_fastapi_routes.py`（限速/别名/CORS/文档，全部通过） | AI Agent |
