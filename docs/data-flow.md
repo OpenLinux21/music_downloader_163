@@ -123,6 +123,33 @@ json → 下载信息 JSON（含 cached 字段）
 
 原「路由层先调 name_v1+url_v1、下载器内部再调一轮」的重复上游调用已消除（知识库已知问题 #5）；原「歌名 [音质]」展示名缓存检查失效问题随缓存键化一并修复（知识库已知问题 #3）。
 
+### 4.1 批量下载流（`POST /batch_download`，2026-11-16 新增）
+
+```text
+POST /batch_download {tracks:[{id,name,artists}], quality, name?, user_cookie?}
+   │
+   ▼
+校验 tracks（非空数组/≤100 项/每项 id 可转 int）、quality 白名单；
+user_cookie 内存解析（语义同 /download）
+   │
+   ▼
+ThreadPoolExecutor(3) 逐首复用上方 /download 同一下载链路
+（缓存命中零上游调用；单首失败仅告警计数，不中断批次）
+   │
+   ▼
+成功项：缓存命中 → record_access；真实交付 → record_download 计入排行榜
+   │
+   ▼
+zipfile（ZIP_STORED）写入 tempfile.mkstemp 临时 zip
+条目名 = 「01. 歌名 - 歌手.实际扩展名」（序号前缀去重，非法字符清洗）
+   │
+   ▼
+FileResponse zip 流 + X-Download-Filename / X-Batch-Total|Success|Failed
+响应完成后 BackgroundTask 清理临时 zip
+```
+
+全部失败返回 404；部分失败仍 200，失败数经 `X-Batch-Failed` 标注。前端批量入口位于歌单/专辑解析页的 `BatchDownloadBar`（`frontend/src/api.js` 的 `downloadBatch`）。
+
 ## 5. ffmpeg 元数据写入流（`MusicDownloader._write_metadata_with_ffmpeg`）
 
 ```text

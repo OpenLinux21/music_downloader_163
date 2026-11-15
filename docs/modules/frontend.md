@@ -13,7 +13,7 @@ frontend/
 └── src/
     ├── main.jsx          # React 挂载 + ConfigProvider（中文语言包，主色 #c20c0c）
     ├── App.jsx           # 全部页面组件（Layout + Tabs + 排行榜卡片）
-    ├── api.js            # 统一 API 封装（getJSON/postJSON/downloadMusic/Cookie 存取）
+    ├── api.js            # 统一 API 封装（getJSON/postJSON/downloadMusic/downloadBatch/Cookie 存取）
     └── styles.css        # 少量全局样式
 ```
 
@@ -30,8 +30,8 @@ frontend/
 | --- | --- | --- |
 | 歌曲搜索 | `POST /search` | 关键词 → 表格（歌曲/歌手/专辑），每行可「去解析」「去下载」（回填 ID 并切 Tab） |
 | 单曲解析 | `POST /song`（`type=json`） | ID/链接 → 信息卡（歌名/歌手/专辑/音质/大小 + `<audio>` 试听 + 歌词框）；`url` 直链可打开 |
-| 歌单解析 | `GET /playlist` | 歌单名/曲目数 + 曲目表格 |
-| 专辑解析 | `GET /album` | 专辑名/描述 + 曲目表格 |
+| 歌单解析 | `GET /playlist` | 歌单名/曲目数 + 曲目表格 + 批量下载操作条（`BatchDownloadBar`） |
+| 专辑解析 | `GET /album` | 专辑名/描述 + 曲目表格（**消费后端 `songs` 字段**，2026-11-16 修复原 `tracks` 字段错配导致的空表格）+ 批量下载操作条 |
 | 音乐下载 | `POST /download`（`fetch` XHR 等价的 blob 方案见 `api.js`） | 见第 4 节 |
 | 下载排行榜 | `GET /rank` | 页面加载拉取，TOP 20 列表（徽标名次 + 「N 人下载」）；空榜隐藏 |
 
@@ -45,6 +45,8 @@ frontend/
 ## 4. 下载实现细节
 
 `api.js` 的 `downloadMusic`：XHR（`responseType=blob`）`POST /download`（JSON body：id/quality/user_cookie）；成功后从 `X-Download-Filename`（URL 编码）解码服务端实际文件名（按真实音频格式，如 `歌名.flac`），`URL.createObjectURL` + 隐藏 `<a>` 触发浏览器保存；失败解析 JSON 错误体并经 antd message 提示。下载成功后自动 `GET /recommend?song_id=` 渲染智能推荐卡片（名称/歌手 + 缓存音质 Tag 含大小 + 「填入下载」按钮）。
+
+`api.js` 的 `downloadBatch`（2026-11-16 新增）：同方案 XHR blob `POST /batch_download`（JSON body：tracks/quality/name/user_cookie），tracks 来自当前解析页表格数据；成功后解码 zip 文件名保存，并读取 `X-Batch-Total/Success/Failed` 计数头，经 antd message 提示「成功 X/共 Y 首」（有跳过时注明版权/Cookie 限制）。批量操作条 `BatchDownloadBar` 提供音质下拉（复用 `QUALITIES`）与按钮，等待期间以 `message.loading`（key 复用）持续提示，完成后同 key 替换为结果。
 
 ## 5. 修改注意事项
 

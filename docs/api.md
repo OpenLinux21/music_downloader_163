@@ -240,7 +240,32 @@ POST /song {"id":"123","level":"xxx"}
 
 ### 4.10 `GET /api/info` — 服务信息
 
-无参数。`data` 含 `name`（网易云音乐API服务）、`version`（2.0.0）、`endpoints`（9 个端点及说明）、`supported_qualities`（**当前为 7 项，缺 `dolby`，与其他接口校验列表不一致**）、`config`（`storage_dir` 存储目录绝对路径、`max_cache_mb` 缓存上限、`max_file_size` 500MB、`request_timeout` 30s）。
+无参数。`data` 含 `name`（网易云音乐API服务）、`version`（2.0.0）、`endpoints`（10 个端点及说明）、`supported_qualities`（**当前为 7 项，缺 `dolby`，与其他接口校验列表不一致**）、`config`（`storage_dir` 存储目录绝对路径、`max_cache_mb` 缓存上限、`max_file_size` 500MB、`request_timeout` 30s）。
+
+### 4.11 `POST /batch_download` — 批量下载（2026-11-16 新增）
+
+| 参数 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `tracks` | 是 | 无 | 歌曲对象数组 `[{"id", "name", "artists"}, ...]`，由前端传入已解析的歌单/专辑曲目列表；单批上限 **100 首**（超出返回 400） |
+| `quality` | 否 | `lossless` | 音质，见第 3 节（白名单与 `/download` 一致） |
+| `name` | 否 | `批量下载` | zip 文件名（不含 `.zip` 后缀，非法字符清洗后下发） |
+| `user_cookie` | 否 | 空 | 请求级用户凭据，语义与 `/download` 完全一致（仅内存使用，不落盘/日志/DB） |
+
+成功返回 **zip 文件流**（`Content-Type: application/zip`，`Content-Disposition: attachment`），并附加响应头：
+
+| 响应头 | 内容 |
+| --- | --- |
+| `X-Download-Filename` | URL 编码后的 zip 文件名（如 `专辑名.zip`） |
+| `X-Batch-Total` | 提交曲目总数 |
+| `X-Batch-Success` | 成功打包曲目数 |
+| `X-Batch-Failed` | 失败曲目数（单首失败不中断批次） |
+
+zip 内条目命名：`01. 歌名 - 歌手.实际扩展名`（序号前缀保留曲序并天然去重；非法字符清洗为 `_`；无歌手时省略 `- 歌手` 段）。打包用标准库 `zipfile` 的 `ZIP_STORED`（音频本身已压缩，不额外耗 CPU），临时 zip 在响应完成后由后台任务清理。
+
+行为说明：
+- 逐首复用 `/download` 同一下载链路（`ThreadPoolExecutor` 3 并发）：缓存命中（通过哈希校验）零上游调用并累加访问量；未命中才真实下载登记；真实交付计入排行榜（与 `/download` 口径一致）。
+- `tracks` 中的 `id` 仅接受纯数字（前端解析页输出即纯数字 ID，不做链接解析）。
+- 错误：400（`tracks` 缺失/非数组/超上限/非对象项/非法 ID/非法音质）；404（全部歌曲下载失败，如全部版权受限）；500（打包或服务器异常）。部分失败不算错误（以 `X-Batch-Failed` 标注）。
 
 ## 5. 输入解析规则（重要）
 
