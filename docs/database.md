@@ -10,6 +10,8 @@
 storage/                             # 运行时生成，整体被 .gitignore 排除
 ├── root.db                          # sqlite3 元数据库
 ├── sha256sum.db                     # sqlite3 哈希追踪库
+├── cookies.db                       # sqlite3 防刷会话库（sessions / downloads 表）
+├── .ranking_secret                  # HMAC-SHA256 签名密钥（0600，仅服务端持有）
 ├── <song_id>/                       # 每首歌曲一个文件夹（song_id 为网易云歌曲 ID）
 │   ├── <歌曲名>.<ext>                # 各音质音频；扩展名被其他音质占用时为 <歌曲名>.<quality>.<ext>
 │   ├── cover.jpg                    # 专辑封面（下载时落盘，供嵌入与展示复用）
@@ -89,7 +91,42 @@ storage/                             # 运行时生成，整体被 .gitignore �
 - 校验点在下载器缓存命中分支（`MusicDownloader`），路由层无感知；校验为每次命中实时重算（约 10MB 文件 < 50ms，个人规模可接受）。
 - 升级自愈：本库引入前已存在的缓存文件无哈希记录，首次访问会走一次「失效重下」完成登记（`invalidate_file` 保留 songs 行与访问量）。
 
-## 4. 缓存语义
+## 4. cookies.db（防刷会话库，2026-11-15 引入）
+
+### 4.1 sessions 表（会话签发记录）
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `session_id` | TEXT PK | 随机会话 ID（`secrets.token_urlsafe(16)`） |
+| `issued_at` | REAL | 签发时间 |
+| `expires_at` | REAL | 过期时间（默认签发后 7 天） |
+| `ip` | TEXT | 签发时来源 IP |
+
+### 4.2 downloads 表（真实交付记录）
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `session_id` | TEXT | 会话 ID |
+| `song_id` | INTEGER | 歌曲 |
+| `quality` | TEXT | 本次交付的音质（去重刷新时覆盖） |
+| `downloaded_at` | REAL | 最近交付时间 |
+| 约束 | — | `PRIMARY KEY (session_id, song_id)`：同一会话对同一歌曲只计一次（防反复下载刷排名） |
+
+### 4.3 防刷 Cookie 机制（HMAC-SHA256）
+
+- 密钥：32 字节随机 hex，首次使用生成并持久化于 `storage/.ranking_secret`（0600 权限），**仅服务端持有，绝不下发/写日志/入 Git**；
+- Cookie `nu_session` 值 = `{session_id}.{issued_at}.{expires_at}.{HMAC-SHA256 签名 hex}`，属性 HttpOnly + SameSite=Lax + Path=/，默认 7 天；
+- 校验顺序：`hmac.compare_digest` 验签 → 检查时效；无效/过期即重新签发新会话并经 Set-Cookie 下发；
+- 每个请求经中间件保证持有会话（`request.state.session_id`），`/download` 真实完成交付后 `record_download` 记账。
+
+### 4.4 排行榜口径（`GET /rank`）
+
+- 统计窗口：最近 30 天（`RANK_WINDOW_DAYS`，"最近"语义的可调常数）；
+- 计数：每歌曲的**独立会话数**（`COUNT(*)`，受 downloads 主键去重约束）；
+- 排序：计数降序，并列按歌曲名升序（SQLite BINARY 字节序，确定可复现）；TOP 20；
+- 已清理歌曲（root.db 无 songs 元数据）不入榜。
+
+## 5. 缓存语义
 
 - 缓存键：`(song_id, quality)`（主存储，`is_copy = 0`）；命中条件为 DB 有记录 **且** 文件真实存在。
 - 命中行为：直接复用文件，调用方执行 `record_access(song_id)` 累加 `visit_count`；响应组装读取 root.db（`song_with_file`），不再发起上游请求（修复原 `/download` 每次重复调用上游的问题）。
@@ -104,7 +141,7 @@ storage/                             # 运行时生成，整体被 .gitignore �
 
 执行时机：服务启动（导入 `main` 时创建 `StorageManager` 后）立即执行一次；守护线程 `storage-cleanup` 每 3600 秒循环执行；清理结果经 `STORAGE` 前缀输出（后续可接入统一日志器）。清理失败仅告警，不影响服务。
 
-## 5. 清理策略（`StorageManager.cleanup`）
+## 6. 清理策略（`StorageManager.cleanup`）
 
 | 策略 | 触发条件 | 动作 |
 | --- | --- | --- |
@@ -113,9 +150,10 @@ storage/                             # 运行时生成，整体被 .gitignore �
 
 执行时机：服务启动（导入 `main` 时创建 `StorageManager` 后）立即执行一次；守护线程 `storage-cleanup` 每 3600 秒循环执行；清理结果经 `STORAGE` 前缀输出（后续可接入统一日志器）。清理失败仅告警，不影响服务。
 
-## 6. 变更记录
+## 7. 变更记录
 
 | 日期 | 变更 | 执行者 |
 | --- | --- | --- |
 | 2026-11-15 | 初版创建：root.db（songs/files 表）、存储目录布局、缓存键与命中语义、双策略清理 | AI Agent（feat/storage-cache 分支） |
 | 2026-11-15 | 新增 sha256sum.db（file_hashes 表）：全量文件哈希登记、命中前实时校验、损坏失效重下链路、清理联动删除哈希 | AI Agent（feat/sha256-tracking 分支） |
+| 2026-11-15 | 新增 cookies.db（sessions/downloads 表）与 .ranking_secret：HMAC-SHA256 防刷会话 Cookie、真实交付去重记账、/rank 排行榜口径 | AI Agent（feat/ranking-antispam 分支） |

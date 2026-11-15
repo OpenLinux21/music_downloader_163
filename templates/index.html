@@ -199,6 +199,11 @@
             <h5>搜索结果：</h5>
             <ul class="list-group" id="search-list"></ul>
         </div>
+        <!-- 下载排行榜 -->
+        <div id="rank-panel" class="mt-4 d-none">
+            <h5>🔥 下载排行榜 <small class="text-muted">TOP 20 · 按最近 30 天独立用户数</small></h5>
+            <ol class="list-group list-group-numbered" id="rank-list"></ol>
+        </div>
         <!-- 结果展示区域 -->
         <div id="song-info" class="alert alert-info d-none mt-4 p-0 border-0" style="box-shadow:0 2px 8px rgba(0,0,0,0.07);">
             <div class="row g-0 align-items-stretch">
@@ -600,9 +605,21 @@
                 }, 'json');
             });
 
+            // 下载排行榜（页面加载即拉取；空榜单隐藏）
+            $.get('/rank', function(data) {
+                const items = (data && data.data && data.data.rank) || [];
+                if (!items.length) { return; }
+                $('#rank-list').html(items.map(function(it) {
+                    return '<li class="list-group-item d-flex justify-content-between align-items-center">' +
+                        '<span>' + it.name + ' <small class="text-muted">- ' + (it.artists || '') + '</small></span>' +
+                        '<span class="badge bg-danger rounded-pill">' + it.session_count + ' 人下载</span>' +
+                        '</li>';
+                }).join(''));
+                $('#rank-panel').removeClass('d-none');
+            });
+
             // 个人 Cookie：仅存于浏览器 localStorage，随下载请求发送（服务器不持久化）
-            const USER_COOKIE_KEY = 'netease_user_cookie';
-            const $cookieInput = $('#user_cookie');
+            const USER_COOKIE_KEY = 'netease_user_cookie';            const $cookieInput = $('#user_cookie');
             $cookieInput.val(localStorage.getItem(USER_COOKIE_KEY) || '');
             $cookieInput.on('input', function() {
                 const v = $(this).val().trim();
